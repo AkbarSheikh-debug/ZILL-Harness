@@ -25,6 +25,8 @@ jobs:
         run: pip install .
       - name: Compile
         run: python -m compileall -q zill
+      - name: Tests (offline, no API key)
+        run: python -m unittest discover -v
       - name: CLI smoke test
         run: |
           zill --help

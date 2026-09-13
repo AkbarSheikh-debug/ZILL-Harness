@@ -13,7 +13,11 @@ Design rules:
     what gets shown, before_turn (day 3) decides what the model sees.
   * Every run terminates: after max_turns the model is told to wrap up and
     gets one last call with no tools.
+  * Every tool call carries an id and its result repeats it, so results pair
+    with calls by id, never by position. Providers that send no id get one.
 """
+
+import uuid
 
 from . import provider
 
@@ -32,6 +36,8 @@ def run_loop(model, system, messages, tools, on_event, before_tool,
             # Replace contents, not the binding, so the caller's list stays live.
             messages[:] = before_turn(messages)
         reply = provider.complete(model, system, messages, specs)
+        for call in reply["tool_calls"]:
+            call["id"] = call.get("id") or f"call_{uuid.uuid4().hex[:12]}"
         messages.append({"role": "assistant", "text": reply["text"],
                          "tool_calls": reply["tool_calls"]})
         on_event("assistant", reply)
@@ -41,7 +47,8 @@ def run_loop(model, system, messages, tools, on_event, before_tool,
             on_event("tool_start", call)
             result = _execute(call, tools, before_tool)
             on_event("tool_end", {"name": call["name"], "result": result})
-            messages.append({"role": "tool", "name": call["name"], "text": result})
+            messages.append({"role": "tool", "id": call["id"], "name": call["name"],
+                             "text": result})
 
     messages.append({"role": "user", "text": "Turn limit reached; wrap up now."})
     reply = provider.complete(model, system, messages, [])

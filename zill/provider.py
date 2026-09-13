@@ -12,6 +12,15 @@ Design rules:
   * Transient failures (rate limits, 5xx, network drops) retry with
     exponential backoff; permanent failures raise immediately with enough
     of the server's error body to debug from.
+
+The provider contract (what any future adapter must honour):
+  complete(model, system, messages, tools) -> {"text", "tool_calls", "usage"}
+    messages: {"role": "user", "text"}
+              {"role": "assistant", "text", "tool_calls": [{"id", "name", "args", ...}]}
+              {"role": "tool", "id", "name", "text"}
+    tool_calls may carry adapter-private keys (Gemini's "signature"); callers
+    store them and hand them back untouched.
+  model_info(model) -> optional capability dict; callers tolerate missing keys.
 """
 
 import json
@@ -23,6 +32,14 @@ import urllib.request
 API_ROOT = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_MODEL = "gemini-3.1-pro-preview"
 RETRYABLE = {429, 500, 502, 503}  # rate limits and server hiccups: wait them out
+MODEL_INFO = {"supports_tools": True, "supports_parallel_tools": True,
+              "supports_thought_signatures": True, "context_window": 1_048_576,
+              "max_output_tokens": 65536}
+
+
+def model_info(model):
+    """Return what model supports: tools, parallel calls, window and output sizes."""
+    return dict(MODEL_INFO)
 
 
 def api_key():
@@ -63,14 +80,15 @@ def _to_wire(messages):
 def complete(model, system, messages, tools):
     """Send one conversation to the model and return its neutral reply.
 
-    Returns {"text": str, "tool_calls": [{"name", "args", "signature"}],
+    Returns {"text": str, "tool_calls": [{"id", "name", "args", "signature"}],
     "usage": {"input": int, "output": int}}. `tools` is a list of spec dicts,
     each {"schema": <function declaration>}, or empty/None for no tools.
     """
     body = {
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": _to_wire(messages),
-        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 65536},
+        "generationConfig": {"temperature": 0.4,
+                             "maxOutputTokens": model_info(model)["max_output_tokens"]},
     }
     if tools:
         body["tools"] = [{"functionDeclarations": [t["schema"] for t in tools]}]
@@ -82,7 +100,7 @@ def complete(model, system, messages, tools):
     for part in parts:
         if "functionCall" in part:
             fc = part["functionCall"]
-            calls.append({"name": fc["name"], "args": fc.get("args") or {},
+            calls.append({"id": fc.get("id"), "name": fc["name"], "args": fc.get("args") or {},
                           "signature": part.get("thoughtSignature")})
         elif "text" in part and not part.get("thought"):
             # Thought summaries are the model's scratchpad, not its answer.

@@ -98,19 +98,19 @@ its **acceptance checks** pass in CI.
 
 The goal is to make ZILL safe to change.
 
-- [ ] **Fake provider:** a deterministic script (text → tool call → text) with no network access.
-- [ ] **Scenario tests** (`unittest`, standard library): normal loop, blocked tool, unknown tool, tool
+- [x] **Fake provider:** a deterministic script (text → tool call → text) with no network access.
+- [x] **Scenario tests** (`unittest`, standard library): normal loop, blocked tool, unknown tool, tool
       exception, path escape, torn session, interrupted tool, compaction,
       memory persistence, skill loading, sub-agent depth limit, approval
       accept and deny, fleet ordering, provider retries.
-- [ ] **Provider contract:** documented neutral message format, tool-call `id`s
+- [x] **Provider contract:** documented neutral message format, tool-call `id`s
       (old sessions upgraded on load), and optional model metadata
       (`supports_tools`, `supports_parallel_tools`, `context_window`,
       `max_output_tokens`). The Gemini thought-signature handling stays intact.
-- [ ] **Session metadata header:** session id, start time, model, workdir, ZILL
-      version, and enabled extensions. No secrets.
-- [ ] **Windows shell awareness:** tell the model which shell `bash` really runs.
-- [ ] **CI:** tests on Linux, macOS and Windows, plus the dependency and line-budget checks.
+- [x] **Session metadata:** a `<session>.meta.json` beside each transcript with the
+      session id, start time, model, workdir, ZILL version, mode, tools and skills. No secrets.
+- [x] **Windows shell awareness:** tell the model which shell `bash` really runs.
+- [x] **CI:** tests on Linux, macOS and Windows, plus the dependency and line-budget checks.
 
 **Acceptance:** `python -m unittest discover` passes with no API key.
 

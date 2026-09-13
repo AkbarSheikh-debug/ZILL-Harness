@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Offline test suite (`python -m unittest discover`) with a scripted
+  `FakeProvider`, covering the loop, tools, policy, sessions, compaction, memory,
+  skills, sub-agents, fleet and provider retries. No API key needed. It runs in CI.
+- Tool-call ids: every call carries an `id`, and its result repeats it.
+  Sessions saved before ids existed are upgraded when loaded.
+- `provider.model_info()` declares model capabilities. The default compaction
+  budget is now 60% of the model's context window.
+- `<session>.meta.json` sidecar with the model, version, mode, tools and skills. It never contains secrets.
+- `zill.__version__`, which is also the package version source.
+
+### Changed
+- The system prompt names the real shell the `bash` tool runs (`COMSPEC` on
+  Windows) and asks for Windows command syntax there.
+
 ## [0.1.0] - 2026-09-13
 
 ### Added

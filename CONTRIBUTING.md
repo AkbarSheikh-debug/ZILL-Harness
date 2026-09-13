@@ -34,6 +34,7 @@ put interoperability at the edges. The full plan is in [ROADMAP.md](ROADMAP.md).
 5. **Check** before pushing:
    ```sh
    python -m compileall -q zill
+   python -m unittest discover          # offline; tests/fake.py scripts the model
    python -c "import pathlib; print(sum(len(p.read_text(encoding='utf-8').splitlines()) for p in pathlib.Path('zill').glob('*.py')))"
    ```
 6. **Commit** with a clear imperative message (`Add OpenAI-compatible provider`).
