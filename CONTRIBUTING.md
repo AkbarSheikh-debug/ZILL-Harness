@@ -8,7 +8,8 @@ put interoperability at the edges. The full plan is in [ROADMAP.md](ROADMAP.md).
 
 1. **Zero runtime dependencies.** Standard library only. `dependencies = []`
    in `pyproject.toml` stays empty.
-2. **Core line budget: 3,500 lines** across `zill/*.py`. CI fails above it.
+2. **Core line budget: 3,500 lines** across `zill/` (edge packages `zill/mcp/` and
+   `zill/plugins/` get a separate 1,500). CI fails above either.
    If your feature needs more room, make it smaller or propose an optional module.
 3. **One concept per file.** Each module opens with a docstring stating the
    concept it implements and the design rules it keeps. New modules do the same.
@@ -50,10 +51,14 @@ put interoperability at the edges. The full plan is in [ROADMAP.md](ROADMAP.md).
 
 ## Adding a provider
 
-`provider.py` is the only file allowed to know a model's wire format. A new
-provider takes neutral messages `{"role", "text", "tool_calls"}` and returns
-`{"text", "tool_calls", "usage"}`. It must not add imports or logic
-anywhere else.
+Each adapter in `zill/providers/` is the only code allowed to know one wire
+format. The contract is documented at the top of `zill/provider.py`:
+`complete(model, system, messages, tools, base, key)` takes neutral messages
+and returns `{"text", "tool_calls", "usage"}`, plus optional `provider_data`
+that the loop stores and hands back untouched. `model_info(model)` reports
+capabilities. If the API speaks OpenAI's chat-completions format, add a
+`PROVIDERS` entry instead of a new adapter. Every adapter needs wire-shape
+tests in `tests/test_adapters.py`, with requests captured at `urlopen` and no network.
 
 ## Reporting bugs
 

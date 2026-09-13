@@ -32,8 +32,10 @@ where its safety boundary is:
 - Use `safe` mode (the interactive default) on any machine or repo you care about.
 - Only run `yolo` mode (the default with `-p`) in a disposable directory,
   container, or VM.
-- Keep API keys in environment variables. Never commit them or paste them into
-  prompts. Session transcripts in `.zill/sessions` can contain anything the
+- Keep API keys in environment variables or `zill setup`, which stores them in
+  `~/.zill/credentials.json` with owner-only permissions. Never commit them or
+  paste them into prompts. ZILL masks known key values in terminal output, but
+  a tool can still write a key into a file if the model is told to. Session transcripts in `.zill/sessions` can contain anything the
   agent saw, so treat them as sensitive.
 
 ## Principles every contribution keeps

@@ -14,12 +14,18 @@ Design rules:
     so the interrupted transcript is reloaded (and its cut-off calls repaired)
     before the next prompt, and --resume picks it up in a later process.
   * Output is bounded: one line per tool call, one dimmed line per result.
+  * Nothing reaches the terminal unredacted: known key values are masked in
+    assistant text, tool calls, tool results and errors.
+  * `zill setup` asks for keys with hidden input. An interactive start with
+    no usable key runs it first, so installing and pasting a key is enough.
 """
 
 import argparse
+import getpass
 import json
 import sys
 
+from . import credentials, provider
 from .harness import Harness
 from .security import MODES, Policy
 
@@ -35,8 +41,9 @@ def _clip(text, limit):
 
 
 def _describe(call):
-    """Render a tool call as name(clipped JSON arguments)."""
-    return f"{call['name']}({_clip(json.dumps(call['args'], ensure_ascii=False), ARGS_CLIP)})"
+    """Render a tool call as name(clipped JSON arguments), secrets redacted."""
+    args = credentials.redact(json.dumps(call["args"], ensure_ascii=False))
+    return f"{call['name']}({_clip(args, ARGS_CLIP)})"
 
 
 def _dim(text):
@@ -47,11 +54,11 @@ def _dim(text):
 def print_event(kind, payload):
     """on_event for terminals: assistant text, tool call lines, dimmed results."""
     if kind == "assistant" and payload["text"]:
-        print(payload["text"])
+        print(credentials.redact(payload["text"]))
     elif kind == "tool_start":
         print(f"-> {_describe(payload)}")
     elif kind == "tool_end":
-        first = (payload["result"].splitlines() or [""])[0]
+        first = credentials.redact((payload["result"].splitlines() or [""])[0])
         print(_dim(f"   {_clip(first, RESULT_CLIP)}"))
     sys.stdout.flush()
 
@@ -71,7 +78,10 @@ def build_parser():
                                      description="ZILL: a concise coding-agent harness.")
     parser.add_argument("-p", "--prompt", help="run this task headlessly and exit")
     parser.add_argument("-d", "--workdir", default=".", help="directory the agent is jailed to")
-    parser.add_argument("-m", "--model", help="model name (default: ZILL_MODEL or built-in)")
+    parser.add_argument("-m", "--model",
+                        help="provider:model, e.g. anthropic:claude-opus-5, openai:gpt-5, "
+                             "ollama:qwen3 (default: ZILL_MODEL, else the first provider "
+                             "with a key)")
     parser.add_argument("--mode", choices=MODES,
                         help="tool policy (default: safe interactively, yolo with -p)")
     parser.add_argument("--resume", action="store_true",
@@ -80,13 +90,50 @@ def build_parser():
     return parser
 
 
+def setup():
+    """Ask for each provider's API key with hidden input and save the ones given."""
+    print(f"ZILL setup: paste an API key for each provider you use (input is hidden; "
+          f"Enter skips).\nKeys are saved to {credentials.path()}")
+    try:
+        for name, (_, _, key_var, _) in provider.PROVIDERS.items():
+            if key_var:
+                status = " [already set]" if credentials.get(key_var) else ""
+                value = getpass.getpass(f"  {name} {key_var}{status}: ").strip()
+                if value:
+                    credentials.save(key_var, value)
+        suggested = provider.default_model()
+        model = input(f"Default model [{suggested}]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nsetup stopped; keys entered so far are saved")
+        return 1
+    if model:
+        credentials.save("ZILL_MODEL", model)
+    print(f"Ready. Model: {model or suggested}. Run `zill` to start.")
+    return 0
+
+
 def main(argv=None):
-    """Parse arguments, then run headlessly or interactively; return an exit code."""
-    args = build_parser().parse_args(argv)
+    """Parse arguments, then set up, run headlessly, or run interactively."""
+    argv = sys.argv[1:] if argv is None else argv
     # Tool results carry em dashes; a legacy console codepage must not crash us.
-    sys.stdout.reconfigure(errors="replace")
+    if hasattr(sys.stdout, "reconfigure"):  # absent when stdout is redirected in-process
+        sys.stdout.reconfigure(errors="replace")
+    if argv[:1] == ["setup"]:
+        return setup()
+    args = build_parser().parse_args(argv)
+    model = args.model or provider.default_model()
+    missing = provider.missing_key(model)
+    if missing and not args.prompt and sys.stdin.isatty():
+        print(f"No API key found for {model}. Let's add one.")
+        setup()
+        model = args.model or provider.default_model()
+        missing = provider.missing_key(model)
+    if missing:
+        print(f"error: no API key for {model}. Run `zill setup`, or set {missing}.",
+              file=sys.stderr)
+        return 1
     mode = args.mode or ("yolo" if args.prompt else "safe")
-    harness = Harness(args.workdir, model=args.model, on_event=print_event,
+    harness = Harness(args.workdir, model=model, on_event=print_event,
                       policy=Policy(mode, approver=ask_approval), max_turns=args.max_turns)
     if args.resume and not harness.resume():
         print("no session to resume; starting fresh", file=sys.stderr)
@@ -94,7 +141,7 @@ def main(argv=None):
         try:
             harness.run(args.prompt)
         except RuntimeError as err:  # provider failures: a message, not a traceback
-            print(f"error: {err}", file=sys.stderr)
+            print(f"error: {credentials.redact(str(err))}", file=sys.stderr)
             return 1
         return 0
     return _interactive(harness, mode)
@@ -123,7 +170,8 @@ def _interactive(harness, mode):
             print(f"\ninterrupted. The session log is safe: {harness.session_path}\n"
                   f"Keep typing to continue here, or run with --resume later.")
         except Exception as err:  # a failed API call ends the run, not the session
-            print(f"error: {type(err).__name__}: {err}", file=sys.stderr)
+            print(f"error: {type(err).__name__}: {credentials.redact(str(err))}",
+                  file=sys.stderr)
         else:
             continue
         if harness.session_path:

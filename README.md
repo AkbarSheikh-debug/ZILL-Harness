@@ -22,29 +22,37 @@ One command. It needs Python 3.10 or newer:
 pip install git+https://github.com/AkbarSheikh-debug/ZILL-Harness.git
 ```
 
-Then add your API key and start it:
+Then start it. The first time, ZILL asks you to paste an API key:
 
 ```sh
-# macOS / Linux
-export GEMINI_API_KEY="your-key"
-zill
+zill            # no key yet? it runs `zill setup` for you
+zill setup      # add or change keys any time (input is hidden)
 ```
 
-```powershell
-# Windows PowerShell
-$env:GEMINI_API_KEY = "your-key"
-zill
-```
+Keys are saved to `~/.zill/credentials.json`, readable only by you.
+Environment variables work too and always take priority
+(`export ANTHROPIC_API_KEY=...`, or in PowerShell `$env:ANTHROPIC_API_KEY = "..."`).
 
 ### Providers
 
-| Provider | Status | Key variable |
-|---|---|---|
-| Google Gemini | Supported | `GEMINI_API_KEY` or `ZILL_API_KEY` |
-| Anthropic Claude | Planned (v0.2) | `ANTHROPIC_API_KEY` |
-| OpenAI and OpenAI-compatible (OpenRouter, Groq, DeepSeek, Ollama, LM Studio) | Planned (v0.2) | `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, ... |
+Pick a model with `-m provider:model`. With no `-m`, ZILL uses `ZILL_MODEL`,
+or else the default model of the first provider you have a key for.
 
-See [ROADMAP.md](ROADMAP.md). Provider adapters are a great first contribution.
+| Provider | Example `-m` | Key variable |
+|---|---|---|
+| Google Gemini | `gemini:gemini-3.1-pro-preview` (default) | `GEMINI_API_KEY` |
+| Anthropic Claude | `anthropic:claude-opus-5` (default) | `ANTHROPIC_API_KEY` |
+| OpenAI | `openai:gpt-5` (default) | `OPENAI_API_KEY` |
+| OpenRouter | `openrouter:<vendor>/<model>` | `OPENROUTER_API_KEY` |
+| Groq | `groq:<model>` | `GROQ_API_KEY` |
+| DeepSeek | `deepseek:deepseek-chat` (default) | `DEEPSEEK_API_KEY` |
+| Ollama (local) | `ollama:qwen3` | none |
+| LM Studio (local) | `lmstudio:<model>` | none |
+
+Bare names work as well: `claude-…` goes to Anthropic, `gpt-…` and `o3…` go to
+OpenAI, and anything else goes to Gemini. Set `ZILL_BASE_URL` to point the
+chosen provider at another endpoint, such as a proxy or a self-hosted
+OpenAI-compatible server. `ZILL_API_KEY` is a fallback key for any provider.
 
 ## Use it
 
@@ -58,7 +66,7 @@ zill --resume -d ./myproject                  # continue the latest session ther
 |---|---|
 | `-p, --prompt` | Run one task headlessly and exit. |
 | `-d, --workdir` | Directory the agent works in (default `.`). |
-| `-m, --model` | Model name (default `ZILL_MODEL` or `gemini-3.1-pro-preview`). |
+| `-m, --model` | `provider:model` (see Providers). |
 | `--mode` | `safe`, `yolo` or `read-only`. Default: `safe` interactively, `yolo` with `-p`. |
 | `--resume` | Load the newest session in the workdir before running. |
 | `--max-turns` | Tool turns allowed per task (default 120). |
@@ -71,7 +79,9 @@ losing the session. Ctrl-D exits.
 
 | File | What it adds |
 |---|---|
-| `provider.py` | The only code that knows the model's wire format. It sends neutral messages, gets neutral replies back, and retries transient errors. |
+| `provider.py` | One neutral `complete()` in front of every model API. It reads `provider:model`, finds the key, and forwards to an adapter. |
+| `providers/` | One adapter per wire format (`gemini`, `anthropic`, `openai_compat`) plus shared HTTP retries that respect server-requested delays and never retry a daily-quota 429. |
+| `credentials.py` | Keys from the environment or `~/.zill/credentials.json` (mode 0600), and `redact()`, which masks every known secret before anything is printed. |
 | `loop.py` | The agent loop: call the model, run the tools it asks for, repeat. Tool errors become results the model reads, never crashes. |
 | `tools.py` | The `@tool` decorator and six core tools: read, write, edit, bash, list, grep. File paths are confined to the workdir. |
 | `security.py` | `Policy`: deny patterns for catastrophic commands, plus `read-only`, `safe` and `yolo` modes with an approver hook. |

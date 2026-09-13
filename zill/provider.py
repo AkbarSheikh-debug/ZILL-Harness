@@ -1,132 +1,94 @@
-"""Day 1 — The provider: the only file in ZILL that knows about Gemini.
+"""The provider: one neutral function in front of every model API.
 
-Concept: a model is a function from a conversation to a reply. This module
-turns the harness's neutral message format into Gemini's wire format, makes
-one HTTP call, and turns the answer back into a plain dict. Nothing else in
-the harness imports urllib or knows what a "part" is.
+Concept: a model is a function from a conversation to a reply. The loop
+calls complete(); this module reads the model name, picks the adapter that
+speaks that vendor's wire format, finds the key, and forwards the call.
 
 Design rules:
-  * Neutral in, neutral out. Callers speak {"role", "text", "tool_calls"};
-    only _to_wire and complete() ever see Gemini's JSON shapes.
-  * Standard library only: urllib for HTTP, json for bodies.
-  * Transient failures (rate limits, 5xx, network drops) retry with
-    exponential backoff; permanent failures raise immediately with enough
-    of the server's error body to debug from.
+  * "provider:model" picks the adapter (anthropic:claude-opus-5,
+    ollama:qwen3:8b). A bare name is recognised by its prefix (claude-,
+    gpt-, o1..o9), and anything else means Gemini, so older ZILL_MODEL
+    values keep working.
+  * Keys resolve lazily, on the first call. Building a Harness, reading
+    model_info and running tests never need one.
+  * Each adapter in zill/providers/ is the only code that knows its wire
+    format; nothing here parses a vendor's JSON.
 
-The provider contract (what any future adapter must honour):
-  complete(model, system, messages, tools) -> {"text", "tool_calls", "usage"}
+The provider contract (what every adapter honours):
+  complete(model, system, messages, tools, base, key) -> {"text", "tool_calls", "usage"}
     messages: {"role": "user", "text"}
-              {"role": "assistant", "text", "tool_calls": [{"id", "name", "args", ...}]}
+              {"role": "assistant", "text", "tool_calls": [{"id", "name", "args", ...}],
+               "provider_data"?}
               {"role": "tool", "id", "name", "text"}
-    tool_calls may carry adapter-private keys (Gemini's "signature"); callers
+    tool_calls and an optional reply-level "provider_data" may carry
+    adapter-private data (Gemini's signature, Claude's raw blocks); callers
     store them and hand them back untouched.
-  model_info(model) -> optional capability dict; callers tolerate missing keys.
+  model_info(model) -> capability dict; callers tolerate missing keys.
 """
 
-import json
-import os
-import time
-import urllib.error
-import urllib.request
+import re
 
-API_ROOT = "https://generativelanguage.googleapis.com/v1beta/models"
-DEFAULT_MODEL = "gemini-3.1-pro-preview"
-RETRYABLE = {429, 500, 502, 503}  # rate limits and server hiccups: wait them out
-MODEL_INFO = {"supports_tools": True, "supports_parallel_tools": True,
-              "supports_thought_signatures": True, "context_window": 1_048_576,
-              "max_output_tokens": 65536}
+from . import credentials
+from .providers import anthropic, gemini, openai_compat
+
+# name: (adapter, base URL, key variable or None, default model or None)
+PROVIDERS = {
+    "gemini": (gemini, "https://generativelanguage.googleapis.com/v1beta",
+               "GEMINI_API_KEY", "gemini-3.1-pro-preview"),
+    "anthropic": (anthropic, "https://api.anthropic.com/v1", "ANTHROPIC_API_KEY", "claude-opus-5"),
+    "openai": (openai_compat, "https://api.openai.com/v1", "OPENAI_API_KEY", "gpt-5"),
+    "openrouter": (openai_compat, "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", None),
+    "groq": (openai_compat, "https://api.groq.com/openai/v1", "GROQ_API_KEY", None),
+    "deepseek": (openai_compat, "https://api.deepseek.com/v1", "DEEPSEEK_API_KEY", "deepseek-chat"),
+    "ollama": (openai_compat, "http://localhost:11434/v1", None, None),
+    "lmstudio": (openai_compat, "http://localhost:1234/v1", None, None),
+}
+DEFAULT_MODEL = "gemini:gemini-3.1-pro-preview"
+OPENAI_NAME = re.compile(r"(gpt-|chatgpt-|o\d)")
+
+
+def resolve(model):
+    """Split model into (provider name, adapter, base URL, key variable, model id)."""
+    name, sep, model_id = model.partition(":")
+    if not sep or name not in PROVIDERS:
+        model_id = model
+        name = ("anthropic" if model.startswith("claude") else
+                "openai" if OPENAI_NAME.match(model) else "gemini")
+    adapter, base, key_var, _ = PROVIDERS[name]
+    return name, adapter, credentials.get("ZILL_BASE_URL") or base, key_var, model_id
+
+
+def default_model():
+    """ZILL_MODEL if set, else the default model of the first provider with a key."""
+    chosen = credentials.get("ZILL_MODEL")
+    if chosen:
+        return chosen
+    for name, (_, _, key_var, default) in PROVIDERS.items():
+        if key_var and default and credentials.get(key_var):
+            return f"{name}:{default}"
+    return DEFAULT_MODEL
+
+
+def missing_key(model):
+    """Return the key variable model needs but lacks, or None."""
+    name, _, _, key_var, _ = resolve(model)
+    if key_var is None or credentials.get(key_var) or credentials.get("ZILL_API_KEY"):
+        return None
+    return key_var
 
 
 def model_info(model):
-    """Return what model supports: tools, parallel calls, window and output sizes."""
-    return dict(MODEL_INFO)
-
-
-def api_key():
-    """Return the API key from ZILL_API_KEY, falling back to GEMINI_API_KEY."""
-    key = os.environ.get("ZILL_API_KEY") or os.environ.get("GEMINI_API_KEY")
-    if not key:
-        raise RuntimeError(
-            "No API key found. Set ZILL_API_KEY (or GEMINI_API_KEY) to your "
-            "Gemini API key before running the harness."
-        )
-    return key
-
-
-def _to_wire(messages):
-    """Translate neutral messages into Gemini `contents` entries."""
-    contents = []
-    for m in messages:
-        if m["role"] == "user":
-            contents.append({"role": "user", "parts": [{"text": m["text"]}]})
-        elif m["role"] == "assistant":
-            parts = [{"text": m["text"]}] if m.get("text") else []
-            for call in m.get("tool_calls") or []:
-                part = {"functionCall": {"name": call["name"], "args": call["args"]}}
-                # Gemini 3 rejects a follow-up request unless each functionCall
-                # part carries back the exact thoughtSignature it arrived with.
-                if call.get("signature"):
-                    part["thoughtSignature"] = call["signature"]
-                parts.append(part)
-            contents.append({"role": "model", "parts": parts})
-        elif m["role"] == "tool":
-            response = {"name": m["name"], "response": {"result": m["text"]}}
-            contents.append({"role": "user", "parts": [{"functionResponse": response}]})
-        else:
-            raise ValueError(f"unknown message role: {m['role']!r}")
-    return contents
+    """Return what model supports, from its adapter; needs no key."""
+    _, adapter, _, _, model_id = resolve(model)
+    return adapter.model_info(model_id)
 
 
 def complete(model, system, messages, tools):
-    """Send one conversation to the model and return its neutral reply.
-
-    Returns {"text": str, "tool_calls": [{"id", "name", "args", "signature"}],
-    "usage": {"input": int, "output": int}}. `tools` is a list of spec dicts,
-    each {"schema": <function declaration>}, or empty/None for no tools.
-    """
-    body = {
-        "systemInstruction": {"parts": [{"text": system}]},
-        "contents": _to_wire(messages),
-        "generationConfig": {"temperature": 0.4,
-                             "maxOutputTokens": model_info(model)["max_output_tokens"]},
-    }
-    if tools:
-        body["tools"] = [{"functionDeclarations": [t["schema"] for t in tools]}]
-    data = _post(f"{API_ROOT}/{model}:generateContent", body)
-
-    candidates = data.get("candidates") or [{}]
-    parts = (candidates[0].get("content") or {}).get("parts") or []
-    text, calls = [], []
-    for part in parts:
-        if "functionCall" in part:
-            fc = part["functionCall"]
-            calls.append({"id": fc.get("id"), "name": fc["name"], "args": fc.get("args") or {},
-                          "signature": part.get("thoughtSignature")})
-        elif "text" in part and not part.get("thought"):
-            # Thought summaries are the model's scratchpad, not its answer.
-            text.append(part["text"])
-    meta = data.get("usageMetadata") or {}
-    usage = {"input": meta.get("promptTokenCount", 0),
-             "output": meta.get("candidatesTokenCount", 0)}
-    return {"text": "".join(text), "tool_calls": calls, "usage": usage}
-
-
-def _post(url, body, retries=5):
-    """POST JSON to url and return the decoded reply, retrying transient errors."""
-    payload = json.dumps(body).encode("utf-8")
-    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key()}
-    for attempt in range(retries):
-        request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-        last_try = attempt == retries - 1
-        try:
-            with urllib.request.urlopen(request, timeout=600) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as err:
-            detail = err.read().decode("utf-8", errors="replace")[:400]
-            if err.code not in RETRYABLE or last_try:
-                raise RuntimeError(f"Gemini API error {err.code}: {detail}") from err
-        except (urllib.error.URLError, TimeoutError) as err:
-            if last_try:
-                raise RuntimeError(f"Gemini API unreachable: {err}") from err
-        time.sleep(2 ** attempt * 2)
-    raise RuntimeError("Gemini API request failed after retries")
+    """Send one conversation to model's provider and return the neutral reply."""
+    name, adapter, base, key_var, model_id = resolve(model)
+    key = None
+    if key_var:
+        key = credentials.get(key_var) or credentials.get("ZILL_API_KEY")
+        if not key:
+            raise RuntimeError(f"No API key for {name}. Run `zill setup`, or set {key_var}.")
+    return adapter.complete(model_id, system, messages, tools, base=base, key=key)
