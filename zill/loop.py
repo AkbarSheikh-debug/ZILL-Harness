@@ -16,7 +16,8 @@ Design rules:
   * Every tool call carries an id and its result repeats it, so results pair
     with calls by id, never by position. Providers that send no id get one.
   * Events are plain dicts and consumers may ignore any kind: provider_start,
-    provider_end, assistant, tool_start, tool_blocked, tool_end.
+    text_delta (when streaming), provider_end, assistant, tool_start,
+    tool_blocked, tool_end.
 """
 
 import time
@@ -26,20 +27,21 @@ from . import provider
 
 
 def run_loop(model, system, messages, tools, on_event, before_tool,
-             max_turns=80, before_turn=None, after_tool=None):
+             max_turns=80, before_turn=None, after_tool=None, stream=False):
     """Drive the model until it answers without tool calls; return that text.
 
     tools maps name -> Tool (with .spec and .run). on_event(kind, payload)
     reports progress. before_tool(call) returns None to allow a call or a
     reason string to block it. after_tool(call, result) may extend the
-    result of a call that ran.
+    result of a call that ran. With stream, text arrives as text_delta events
+    and the assistant event is marked streamed.
     """
     specs = [t.spec for t in tools.values()]
     for _ in range(max_turns):
         if before_turn is not None:
             # Replace contents, not the binding, so the caller's list stays live.
             messages[:] = before_turn(messages)
-        reply = _call_model(model, system, messages, specs, on_event)
+        reply = _call_model(model, system, messages, specs, on_event, stream)
         if not reply["tool_calls"]:
             return reply["text"]
         for call in reply["tool_calls"]:
@@ -60,13 +62,15 @@ def run_loop(model, system, messages, tools, on_event, before_tool,
                              "text": result})
 
     messages.append({"role": "user", "text": "Turn limit reached; wrap up now."})
-    return _call_model(model, system, messages, [], on_event)["text"]
+    return _call_model(model, system, messages, [], on_event, stream)["text"]
 
 
-def _call_model(model, system, messages, specs, on_event):
+def _call_model(model, system, messages, specs, on_event, stream=False):
     """Make one model call, record the assistant message, and return the reply."""
     on_event("provider_start", {"model": model, "messages": len(messages)})
-    reply = provider.complete(model, system, messages, specs)
+    on_text = (lambda chunk: on_event("text_delta", {"text": chunk})) if stream else None
+    reply = provider.complete(model, system, messages, specs, on_text=on_text)
+    reply["streamed"] = stream
     on_event("provider_end", {"model": model, "usage": reply.get("usage") or {}})
     for call in reply["tool_calls"]:
         call["id"] = call.get("id") or f"call_{uuid.uuid4().hex[:12]}"

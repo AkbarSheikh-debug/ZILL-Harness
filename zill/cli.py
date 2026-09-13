@@ -1,40 +1,56 @@
 """Day 5 — The command line: the front door to the harness.
 
-Concept: everything the week built is reachable from one command. With -p the
-agent takes a task headlessly and exits; without it the user gets a prompt
-loop over one persistent session. Both paths build the same Harness, so the
+Concept: `zill` opens a prompt loop over one persistent session; `zill run
+"task"` (or -p) runs one task headlessly and exits; subcommands in
+commands.py check, inspect and manage everything else. Every path resolves
+its settings through settings.resolve and builds the same Harness, so the
 terminal adds only what a person needs to see and approve.
 
 Design rules:
   * Presentation only. The CLI prints events and answers approvals; tools,
     policy, persistence and compaction stay in their own modules.
   * The default mode follows who is watching: safe when a person can answer
-    approval prompts, yolo when -p runs with nobody there to answer them.
+    approval prompts, yolo when a task runs headlessly. A project file may
+    only make it stricter.
   * Ctrl-C stops the run, never the session. The log is flushed as it grows,
     so the interrupted transcript is reloaded (and its cut-off calls repaired)
     before the next prompt, and --resume picks it up in a later process.
   * Output is bounded: one line per tool call, one dimmed line per result.
-  * Nothing reaches the terminal unredacted: known key values are masked in
-    assistant text, tool calls, tool results and errors.
-  * `zill setup` asks for keys with hidden input. An interactive start with
-    no usable key runs it first, so installing and pasting a key is enough.
+  * Nothing reaches the terminal unredacted. Streamed text is printed a line
+    at a time, so a key split across fragments is still masked.
+  * --json prints exactly one JSON object and nothing else, for scripts.
+  * An interactive start with no usable key runs `zill setup` first, so
+    installing and pasting a key is enough.
 """
 
 import argparse
-import getpass
 import json
 import sys
 
-from . import credentials, provider
-from .checkpoints import Checkpoints
-from .harness import Harness
-from .security import MODES, Policy
+from . import commands, config, cost, credentials, provider, settings, skills
+from .harness import COMPACT_AT
+from .profiles import PROFILES
+from .security import MODES
 
 ARGS_CLIP = 100  # characters of a tool call's JSON arguments shown
 RESULT_CLIP = 120  # characters of a result's first line shown
 DIM, RESET = "\033[2m", "\033[0m"
 PROMPT = "zill> "
-COMMANDS = ("/undo", "/checkpoints", "/todo")
+SLASH = {
+    "/help": "show these commands",
+    "/cost": "tokens used and estimated cost",
+    "/model": "show the model, or switch: /model anthropic:claude-opus-5",
+    "/mode": "show the mode, or switch: /mode safe | yolo | read-only",
+    "/compact": "summarise older turns now to free context",
+    "/clear": "start a fresh conversation (new session)",
+    "/todo": "show the agent's checklist",
+    "/undo": "undo the agent's latest change",
+    "/checkpoints": "list checkpoints",
+    "/sessions": "list saved sessions here",
+    "/skills": "list the skills in ./skills",
+    "/exit": "quit (Ctrl-D works too)",
+}
+_streamed = []  # text fragments not yet printed: flushed a whole line at a time
 
 
 def _clip(text, limit):
@@ -54,9 +70,20 @@ def _dim(text):
 
 
 def print_event(kind, payload):
-    """on_event for terminals: assistant text, tool call lines, dimmed results."""
-    if kind == "assistant" and payload["text"]:
-        print(credentials.redact(payload["text"]))
+    """on_event for terminals: streamed or whole assistant text, tool lines, dim results."""
+    if kind == "text_delta":
+        _streamed.append(payload["text"])
+        done, newline, rest = "".join(_streamed).rpartition("\n")
+        if newline:  # keys never span lines, so redacting whole lines is exact
+            print(credentials.redact(done + newline), end="")
+            _streamed[:] = [rest] if rest else []
+    elif kind == "assistant":
+        if not payload.get("streamed"):
+            if payload["text"]:
+                print(credentials.redact(payload["text"]))
+        elif _streamed:
+            print(credentials.redact("".join(_streamed)))
+            _streamed.clear()
     elif kind == "tool_start":
         print(f"-> {_describe(payload)}")
     elif kind == "tool_end":
@@ -80,142 +107,171 @@ def ask_approval(call, reason):
 
 
 def build_parser():
-    """Return the argument parser for python -m zill."""
-    parser = argparse.ArgumentParser(prog="zill",
-                                     description="ZILL: a concise coding-agent harness.")
-    parser.add_argument("-p", "--prompt", help="run this task headlessly and exit")
-    parser.add_argument("-d", "--workdir", default=".", help="directory the agent is jailed to")
+    """Return the argument parser for `zill [task]` and `zill run task`."""
+    parser = argparse.ArgumentParser(
+        prog="zill", description="ZILL: a concise coding-agent harness.",
+        epilog=f"commands: run, resume, {', '.join(commands.COMMANDS)} "
+               f"(zill COMMAND --help for each)")
+    parser.add_argument("task", nargs="?", help="run this task headlessly and exit")
+    parser.add_argument("-p", "--prompt", help="same as giving the task")
+    parser.add_argument("-d", "--workdir", default=".", help="directory the agent works in")
     parser.add_argument("-m", "--model",
                         help="provider:model, e.g. anthropic:claude-opus-5, openai:gpt-5, "
-                             "ollama:qwen3 (default: ZILL_MODEL, else the first provider "
-                             "with a key)")
+                             "ollama:qwen3 (default: ZILL_MODEL, config, else the first "
+                             "provider with a key)")
     parser.add_argument("--mode", choices=MODES,
-                        help="tool policy (default: safe interactively, yolo with -p)")
+                        help="tool policy (default: safe interactively, yolo headless)")
+    parser.add_argument("--profile", choices=list(PROFILES),
+                        help="preset for the kind of work (default: coding)")
     parser.add_argument("--dry-run", action="store_true",
                         help="plan and inspect only: every call that is not a read is blocked")
     parser.add_argument("--verify", metavar="COMMAND",
                         help="a run is done only when COMMAND passes, e.g. \"pytest -q\" "
                              "(default: \"verify\" in .zill/project.json)")
+    parser.add_argument("--json", action="store_true",
+                        help="headless: print one JSON result object and nothing else")
     parser.add_argument("--resume", action="store_true",
                         help="continue the latest session in the working directory")
     parser.add_argument("--max-turns", type=int, default=120, help="tool turns per task")
     return parser
 
 
-def checkpoint_command(argv):
-    """`zill checkpoints` lists snapshots; `zill undo [ID]` restores one."""
-    parser = argparse.ArgumentParser(prog=f"zill {argv[0]}")
-    if argv[0] == "undo":
-        parser.add_argument("id", nargs="?",
-                            help="checkpoint to restore (default: undo the latest change)")
-    parser.add_argument("-d", "--workdir", default=".", help="project directory")
-    args = parser.parse_args(argv[1:])
-    store = Checkpoints(args.workdir)
-    if argv[0] == "checkpoints":
-        entries = store.list()
-        for ref, age, label in entries:
-            print(f"{ref}  {age:>16}  {label}")
-        if not entries:
-            print("no checkpoints yet")
-        return 0
-    return _undo(store, args.id)
-
-
-def _undo(store, ref=None):
-    """Restore a checkpoint and report it; return an exit code."""
-    try:
-        restored = store.restore(ref)
-    except RuntimeError as err:
-        print(f"error: {err}", file=sys.stderr)
-        return 1
-    print(f"restored checkpoint {restored}. To reverse this, run `zill checkpoints` "
-          f"and restore the \"restore:\" entry.")
-    return 0
-
-
-def setup():
-    """Ask for each provider's API key with hidden input and save the ones given."""
-    print(f"ZILL setup: paste an API key for each provider you use (input is hidden; "
-          f"Enter skips).\nKeys are saved to {credentials.path()}")
-    try:
-        for name, (_, _, key_var, _) in provider.PROVIDERS.items():
-            if key_var:
-                status = " [already set]" if credentials.get(key_var) else ""
-                value = getpass.getpass(f"  {name} {key_var}{status}: ").strip()
-                if value:
-                    credentials.save(key_var, value)
-        suggested = provider.default_model()
-        model = input(f"Default model [{suggested}]: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print("\nsetup stopped; keys entered so far are saved")
-        return 1
-    if model:
-        credentials.save("ZILL_MODEL", model)
-    print(f"Ready. Model: {model or suggested}. Run `zill` to start.")
-    return 0
-
-
 def main(argv=None):
-    """Parse arguments, then set up, run headlessly, or run interactively."""
-    argv = sys.argv[1:] if argv is None else argv
+    """Dispatch a subcommand, or resolve settings and run headlessly or interactively."""
+    argv = list(sys.argv[1:] if argv is None else argv)
     # Tool results carry em dashes; a legacy console codepage must not crash us.
     if hasattr(sys.stdout, "reconfigure"):  # absent when stdout is redirected in-process
         sys.stdout.reconfigure(errors="replace")
-    if argv[:1] == ["setup"]:
-        return setup()
-    if argv[:1] in (["checkpoints"], ["undo"]):
-        return checkpoint_command(argv)
-    args = build_parser().parse_args(argv)
-    model = args.model or provider.default_model()
-    missing = provider.missing_key(model)
-    if missing and not args.prompt and sys.stdin.isatty():
-        print(f"No API key found for {model}. Let's add one.")
-        setup()
-        model = args.model or provider.default_model()
-        missing = provider.missing_key(model)
-    if missing:
-        print(f"error: no API key for {model}. Run `zill setup`, or set {missing}.",
-              file=sys.stderr)
-        return 1
-    mode = args.mode or ("yolo" if args.prompt else "safe")
-    policy = Policy(mode, approver=ask_approval, dry_run=args.dry_run)
+    if argv[:1] and argv[0] in commands.COMMANDS:
+        return commands.COMMANDS[argv[0]](argv[1:])
+    parser = build_parser()
+    run_command = argv[:1] == ["run"]
+    if run_command or argv[:1] == ["resume"]:
+        argv = argv[1:] if run_command else ["--resume", *argv[1:]]
+    args = parser.parse_args(argv)
+    task = args.prompt or args.task
+    if run_command and not task:
+        parser.error("zill run needs a task, e.g. zill run \"add a --json flag\"")
+    quiet = args.json
     try:
-        harness = Harness(args.workdir, model=model, on_event=print_event, policy=policy,
-                          max_turns=args.max_turns, verify=args.verify)
-    except RuntimeError as err:  # e.g. an invalid .zill/project.json
-        print(f"error: {err}", file=sys.stderr)
-        return 1
-    if args.resume and not harness.resume():
+        resolved = settings.resolve(args.workdir, args.model, args.mode, args.profile,
+                                    headless=bool(task))
+        if provider.missing_key(resolved["model"]) and not task and sys.stdin.isatty():
+            print(f"No API key found for {resolved['model']}. Let's add one.")
+            commands.setup()
+            resolved = settings.resolve(args.workdir, args.model, args.mode, args.profile)
+        missing = provider.missing_key(resolved["model"])
+        if missing:
+            raise RuntimeError(f"no API key for {resolved['model']}. "
+                               f"Run `zill setup`, or set {missing}.")
+        harness = settings.make_harness(
+            resolved, approver=None if quiet else ask_approval, dry_run=args.dry_run,
+            on_event=None if quiet else print_event, max_turns=args.max_turns,
+            verify=args.verify, stream=not quiet and sys.stdout.isatty())
+    except RuntimeError as err:
+        return _fail(err, quiet)
+    if not quiet:
+        for note in resolved["notes"]:
+            print(f"note: {note}", file=sys.stderr)
+    if args.resume and not harness.resume() and not quiet:
         print("no session to resume; starting fresh", file=sys.stderr)
-    if args.prompt:
-        try:
-            harness.run(args.prompt)
-        except RuntimeError as err:  # provider failures: a message, not a traceback
-            print(f"error: {credentials.redact(str(err))}", file=sys.stderr)
-            return 1
-        return 0
-    return _interactive(harness, mode)
+    if task:
+        return _headless(harness, task, quiet)
+    return _interactive(harness)
 
 
-def _slash(harness, command):
-    """Handle an interactive command: /undo, /checkpoints or /todo."""
-    if command == "/todo":
-        print(harness.todo or "no todo list yet")
-    elif not (harness.checkpoints and harness.checkpoints.available):
-        print("checkpoints are unavailable (git is not on PATH)")
-    elif command == "/checkpoints":
-        for ref, age, label in harness.checkpoints.list() or [("", "", "no checkpoints yet")]:
-            print(f"{ref}  {age}  {label}".strip())
+def _fail(err, as_json):
+    """Report an error for people or scripts; return exit code 1."""
+    message = credentials.redact(str(err))
+    if as_json:
+        print(json.dumps({"ok": False, "error": message}))
     else:
-        _undo(harness.checkpoints)
+        print(f"error: {message}", file=sys.stderr)
+    return 1
 
 
-def _interactive(harness, mode):
-    """Prompt loop: each line is a task; Ctrl-D exits, Ctrl-C stops the current run."""
+def _prices():
+    """Return user price overrides, or {} if the user config cannot be read."""
+    try:
+        return config.load_user().get("prices", {})
+    except RuntimeError:
+        return {}
+
+
+def _headless(harness, task, as_json):
+    """Run one task; print its result (JSON with --json) and a cost line; return exit code."""
+    try:
+        result = harness.run(task)
+    except RuntimeError as err:  # provider failures: a message, not a traceback
+        return _fail(err, as_json)
+    if as_json:
+        print(json.dumps({"ok": True, "result": credentials.redact(result),
+                          "model": harness.model, "session": harness.session_path,
+                          "usage": harness.usage, "todo": harness.todo,
+                          "cost_usd": cost.estimate(harness.model, harness.usage, _prices())},
+                         ensure_ascii=False))
+    else:
+        print(_dim(cost.describe(harness.model, harness.usage, _prices())), file=sys.stderr)
+    return 0
+
+
+def _slash(harness, line):
+    """Handle one /command; return False when the session should end."""
+    command, _, arg = line.partition(" ")
+    arg = arg.strip()
+    if command == "/exit":
+        return False
+    if command == "/help":
+        print("\n".join(f"{name:<13} {text}" for name, text in SLASH.items()))
+    elif command == "/cost":
+        print(cost.describe(harness.model, harness.usage, _prices()))
+    elif command == "/model":
+        missing = provider.missing_key(arg) if arg else None
+        if missing:
+            print(f"{arg} needs {missing}: run `zill setup` first")
+        elif arg:
+            harness.model = arg
+            harness.budget_tokens = int(provider.model_info(arg).get("context_window",
+                                                                     1_000_000) * COMPACT_AT)
+        print(f"model: {harness.model}")
+    elif command == "/mode":
+        if arg and arg not in MODES:
+            print(f"mode must be one of {', '.join(MODES)}")
+        elif arg:
+            harness.policy.mode = arg
+        print(f"mode: {harness.policy.mode}{' (dry-run)' if harness.policy.dry_run else ''}")
+    elif command == "/compact":
+        before, after = harness.compact()
+        print(f"compacted {before} messages to {after}" if after < before
+              else "nothing to compact yet")
+    elif command == "/clear":
+        harness.clear()
+        print("started a fresh conversation")
+    elif command == "/todo":
+        print(harness.todo or "no todo list yet")
+    elif command == "/sessions":
+        commands.sessions(["-d", harness.workdir])
+    elif command == "/skills":
+        catalog = skills.catalog(harness.workdir)
+        print("\n".join(f"{name}: {info['description']}" for name, info in catalog.items())
+              or "no skills: add skills/<name>/SKILL.md")
+    elif command in ("/undo", "/checkpoints"):
+        if not (harness.checkpoints and harness.checkpoints.available):
+            print("checkpoints are unavailable (git is not on PATH)")
+        elif command == "/undo":
+            commands.restore(harness.checkpoints)
+        else:
+            commands.checkpoints(["-d", harness.workdir])
+    else:
+        print(f"unknown command {command}; try /help")
+    return True
+
+
+def _interactive(harness):
+    """Prompt loop: each line is a task or a /command; Ctrl-D exits, Ctrl-C stops a run."""
     dry = "  dry-run" if harness.policy.dry_run else ""
-    print(f"ZILL Harness  model={harness.model}  mode={mode}{dry}\n"
-          f"jail: {harness.workdir}\nCtrl-D exits, Ctrl-C interrupts a run. "
-          f"Commands: {' '.join(COMMANDS)}")
+    print(f"ZILL Harness  model={harness.model}  mode={harness.policy.mode}{dry}\n"
+          f"jail: {harness.workdir}\nCtrl-C interrupts a run. Type /help for commands.")
     if harness.messages:
         print(f"resumed {len(harness.messages)} messages from {harness.session_path}")
     while True:
@@ -229,10 +285,11 @@ def _interactive(harness, mode):
             continue
         if not task:
             continue
-        if task in COMMANDS:
-            _slash(harness, task)
-            continue
         try:
+            if task.startswith("/"):
+                if not _slash(harness, task):
+                    return 0
+                continue
             harness.run(task)
         except KeyboardInterrupt:
             print(f"\ninterrupted. The session log is safe: {harness.session_path}\n"
@@ -242,5 +299,6 @@ def _interactive(harness, mode):
                   file=sys.stderr)
         else:
             continue
+        _streamed.clear()
         if harness.session_path:
             harness.resume(harness.session_path)  # reload and repair cut-off calls

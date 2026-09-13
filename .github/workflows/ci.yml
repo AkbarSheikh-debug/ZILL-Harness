@@ -28,9 +28,13 @@ jobs:
       - name: Tests (offline, no API key)
         run: python -m unittest discover -v
       - name: CLI smoke test
+        shell: bash
         run: |
           zill --help
           python -c "import zill; print(zill.__all__)"
+          zill inspect --json > inspect.json
+          zill doctor --json > doctor.json || true   # no API key in CI: the model check fails
+          python -c "import json; json.load(open('inspect.json')); d = json.load(open('doctor.json')); print('doctor ok:', d['ok'])"
 
   compact:
     runs-on: ubuntu-latest

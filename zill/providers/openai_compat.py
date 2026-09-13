@@ -15,7 +15,7 @@ Design rules:
 
 import json
 
-from .http import post_json
+from .http import post_json, post_sse
 
 MODEL_INFO = {"supports_tools": True, "supports_parallel_tools": True,
               "supports_thought_signatures": False, "context_window": 128_000,
@@ -58,14 +58,43 @@ def _arguments(raw):
     return args if isinstance(args, dict) else {}
 
 
-def complete(model, system, messages, tools, base, key):
-    """Send one conversation to an OpenAI-compatible server and return its reply."""
+def _collect_stream(chunks, on_text):
+    """Merge streamed chat-completion chunks into one message and its usage."""
+    text, slots, usage = [], {}, {}
+    for chunk in chunks:
+        usage = chunk.get("usage") or usage
+        for choice in chunk.get("choices") or []:
+            delta = choice.get("delta") or {}
+            if delta.get("content"):
+                text.append(delta["content"])
+                on_text(delta["content"])
+            for piece in delta.get("tool_calls") or []:  # a call arrives in fragments
+                slot = slots.setdefault(piece.get("index", 0),
+                                        {"id": None, "function": {"name": "", "arguments": ""}})
+                slot["id"] = piece.get("id") or slot["id"]
+                function = piece.get("function") or {}
+                slot["function"]["name"] += function.get("name") or ""
+                slot["function"]["arguments"] += function.get("arguments") or ""
+    message = {"content": "".join(text), "tool_calls": [slots[i] for i in sorted(slots)]}
+    return {"choices": [{"message": message}], "usage": usage}
+
+
+def complete(model, system, messages, tools, base, key, on_text=None):
+    """Send one conversation to an OpenAI-compatible server and return its reply.
+
+    With on_text, the reply is streamed and text fragments go to on_text.
+    """
     body = {"model": model,
             "messages": [{"role": "system", "content": system}] + _to_wire(messages)}
     if tools:
         body["tools"] = [{"type": "function", "function": t["schema"]} for t in tools]
     headers = {"Authorization": f"Bearer {key}"} if key else {}
-    data = post_json(f"{base}/chat/completions", body, headers, "OpenAI-compatible")
+    url = f"{base}/chat/completions"
+    if on_text is None:
+        data = post_json(url, body, headers, "OpenAI-compatible")
+    else:
+        stream_body = {**body, "stream": True, "stream_options": {"include_usage": True}}
+        data = _collect_stream(post_sse(url, stream_body, headers, "OpenAI-compatible"), on_text)
 
     message = ((data.get("choices") or [{}])[0].get("message")) or {}
     calls = [{"id": c.get("id"), "name": (c.get("function") or {}).get("name", ""),

@@ -12,7 +12,7 @@ Design rules:
     functionResponse both echo it; ids ZILL invented are never sent.
 """
 
-from .http import post_json
+from .http import post_json, post_sse
 
 MODEL_INFO = {"supports_tools": True, "supports_parallel_tools": True,
               "supports_thought_signatures": True, "context_window": 1_048_576,
@@ -52,8 +52,12 @@ def _to_wire(messages):
     return contents
 
 
-def complete(model, system, messages, tools, base, key):
-    """Send one conversation to Gemini and return its neutral reply."""
+def complete(model, system, messages, tools, base, key, on_text=None):
+    """Send one conversation to Gemini and return its neutral reply.
+
+    With on_text, the reply is streamed and each text fragment is passed to
+    on_text as it arrives; the returned reply is the same either way.
+    """
     body = {
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": _to_wire(messages),
@@ -62,22 +66,27 @@ def complete(model, system, messages, tools, base, key):
     }
     if tools:
         body["tools"] = [{"functionDeclarations": [t["schema"] for t in tools]}]
-    data = post_json(f"{base}/models/{model}:generateContent", body,
-                     {"x-goog-api-key": key}, "Gemini")
-
-    candidates = data.get("candidates") or [{}]
-    parts = (candidates[0].get("content") or {}).get("parts") or []
-    text, calls = [], []
-    for part in parts:
-        if "functionCall" in part:
-            fc = part["functionCall"]
-            calls.append({"id": fc.get("id"), "native_id": fc.get("id"), "name": fc["name"],
-                          "args": fc.get("args") or {},
-                          "signature": part.get("thoughtSignature")})
-        elif "text" in part and not part.get("thought"):
-            # Thought summaries are the model's scratchpad, not its answer.
-            text.append(part["text"])
-    meta = data.get("usageMetadata") or {}
+    headers = {"x-goog-api-key": key}
+    if on_text is None:
+        chunks = [post_json(f"{base}/models/{model}:generateContent", body, headers, "Gemini")]
+    else:  # each SSE event is a partial response with the same shape
+        chunks = post_sse(f"{base}/models/{model}:streamGenerateContent?alt=sse", body,
+                          headers, "Gemini")
+    text, calls, meta = [], [], {}
+    for data in chunks:
+        candidates = data.get("candidates") or [{}]
+        for part in (candidates[0].get("content") or {}).get("parts") or []:
+            if "functionCall" in part:
+                fc = part["functionCall"]
+                calls.append({"id": fc.get("id"), "native_id": fc.get("id"), "name": fc["name"],
+                              "args": fc.get("args") or {},
+                              "signature": part.get("thoughtSignature")})
+            elif part.get("text") and not part.get("thought"):
+                # Thought summaries are the model's scratchpad, not its answer.
+                text.append(part["text"])
+                if on_text is not None:
+                    on_text(part["text"])
+        meta = data.get("usageMetadata") or meta  # the last chunk carries the totals
     usage = {"input": meta.get("promptTokenCount", 0),
              "output": meta.get("candidatesTokenCount", 0)}
     return {"text": "".join(text), "tool_calls": calls, "usage": usage}

@@ -57,17 +57,32 @@ OpenAI-compatible server. `ZILL_API_KEY` is a fallback key for any provider.
 ## Use it
 
 ```sh
-zill                                          # interactive: prompt loop, safe mode
-zill -p "add a --json flag to cli.py" -d ./myproject   # headless, yolo mode
-zill --resume -d ./myproject                  # continue the latest session there
+zill                                               # interactive: prompt loop, safe mode
+zill run "add a --json flag to cli.py" -d ./myproject   # headless (same as -p), yolo mode
+zill resume -d ./myproject                         # continue the latest session there
+zill run "fix the failing test" --json             # one JSON result object, for scripts
 ```
+
+| Command | What it does |
+|---|---|
+| `zill setup` | Paste API keys (hidden input). |
+| `zill doctor` | Check Python, git, config, keys and permissions, with fixes. |
+| `zill inspect` | Show what a run would get: model, mode, tools and their risk, skills, verify, hooks. |
+| `zill sessions` | List saved sessions. |
+| `zill checkpoints` / `zill undo [id]` | List snapshots, and take changes back. |
+| `zill fleet jobs.json` | Run many `{name, workdir, task}` jobs in parallel. |
+
+In interactive mode, type `/help` for `/cost /model /mode /compact /clear /todo
+/undo /checkpoints /sessions /skills /exit`. Replies stream as they're written.
 
 | Flag | Meaning |
 |---|---|
-| `-p, --prompt` | Run one task headlessly and exit. |
+| `-p, --prompt` | Run one task headlessly and exit (or give the task directly). |
 | `-d, --workdir` | Directory the agent works in (default `.`). |
 | `-m, --model` | `provider:model` (see Providers). |
-| `--mode` | `safe`, `yolo` or `read-only`. Default: `safe` interactively, `yolo` with `-p`. |
+| `--mode` | `safe`, `yolo` or `read-only`. Default: `safe` interactively, `yolo` headless. |
+| `--profile` | `coding` (default), `reviewer` and `research` (read-only), or `writing` (no shell). |
+| `--json` | Headless: print one JSON object with the result, usage and cost, and nothing else. |
 | `--dry-run` | Plan and inspect only: every call that is not a read is blocked, sub-agents included. |
 | `--verify` | A run is done only when this command passes, for example `"pytest -q"`. |
 | `--resume` | Load the newest session in the workdir before running. |
@@ -76,6 +91,20 @@ zill --resume -d ./myproject                  # continue the latest session ther
 In safe mode, every call that changes state asks
 `approve bash({"command": ...})? [y/N]`. Ctrl-C stops the current run without
 losing the session. Ctrl-D exits.
+
+### Configure it
+
+Both files are optional:
+
+- **`~/.zill/config.json`** holds your defaults:
+  `{"model": "anthropic:claude-opus-5", "mode": "safe", "profile": "coding", "prices": {"gemini:gemini-3.6-flash": [0.3, 2.5]}}`.
+  `prices` are USD per million input and output tokens, for models without built-in prices.
+- **`.zill/project.json`** holds per-project settings: `model`, `mode`, `profile`,
+  `verify`, `hooks`.
+
+Precedence is flags, then environment, then project, then user, then defaults.
+A project file can only make the mode stricter, so cloning a repo can never switch
+you into `yolo`.
 
 ### Make it prove its work
 
@@ -132,6 +161,10 @@ the agent did and why.
 | `hooks.py` | Before and after hooks around state-changing tools, with safe `{path}` substitution. |
 | `checkpoints.py` | Shadow-git snapshots before every change, with undo one step at a time. Your own `.git` is untouched. |
 | `todo.py` | The checklist tool. It survives compaction and resume. |
+| `config.py` / `settings.py` | User and project config with strict validation, and the one place a run's model, mode and profile are decided. |
+| `profiles.py` | `coding`, `reviewer`, `research`, `writing`: a prompt, a tool allowlist and a strictest mode. |
+| `cost.py` | Tokens to dollars, from documented list prices only, overridable in config. |
+| `commands.py` | `setup`, `doctor`, `inspect`, `sessions`, `checkpoints`, `undo`, `fleet`. |
 | `context.py` | Compaction. Over the token budget, older turns are summarised and the recent tail is kept verbatim. |
 | `memory.py` | `ZILL.md` project memory, loaded into the system prompt, and the `remember` tool that appends to it. |
 | `skills.py` | `skills/<name>/SKILL.md`. A one-line catalog sits in the prompt, and the full text loads on demand via `use_skill`. |
