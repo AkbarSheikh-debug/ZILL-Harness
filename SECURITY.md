@@ -23,7 +23,9 @@ where its safety boundary is:
 | File tools (`read_file`, `write_file`, `edit_file`, `list_files`, `grep`) confined to the workdir, with symlinks resolved | Yes |
 | Deny patterns for catastrophic shell commands (`sudo`, `rm -rf /`, `mkfs`, `curl \| sh`, force push, and more) | Yes, but only as a tripwire |
 | `safe` mode: every state-changing call needs your approval | Yes |
-| `read-only` mode: no state-changing calls at all | Yes |
+| `read-only` mode and `--dry-run`: no state-changing calls at all, sub-agents included | Yes |
+| Risk classification per call (`read`, `write`, `execute`, `network`, `destructive`), with destructive denied in every mode | Yes, but heuristic for `bash` |
+| Audit log of every tool call and policy decision, secrets redacted (`.zill/audit.jsonl`) | Yes |
 | **`bash` sandboxed to the workdir** | **No.** A shell command can read or write anywhere your user account can. |
 | Protection from prompt injection in files or web content the agent reads | No |
 

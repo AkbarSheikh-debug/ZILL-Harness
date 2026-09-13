@@ -84,6 +84,8 @@ def build_parser():
                              "with a key)")
     parser.add_argument("--mode", choices=MODES,
                         help="tool policy (default: safe interactively, yolo with -p)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="plan and inspect only: every call that is not a read is blocked")
     parser.add_argument("--resume", action="store_true",
                         help="continue the latest session in the working directory")
     parser.add_argument("--max-turns", type=int, default=120, help="tool turns per task")
@@ -133,8 +135,9 @@ def main(argv=None):
               file=sys.stderr)
         return 1
     mode = args.mode or ("yolo" if args.prompt else "safe")
-    harness = Harness(args.workdir, model=model, on_event=print_event,
-                      policy=Policy(mode, approver=ask_approval), max_turns=args.max_turns)
+    policy = Policy(mode, approver=ask_approval, dry_run=args.dry_run)
+    harness = Harness(args.workdir, model=model, on_event=print_event, policy=policy,
+                      max_turns=args.max_turns)
     if args.resume and not harness.resume():
         print("no session to resume; starting fresh", file=sys.stderr)
     if args.prompt:
@@ -149,7 +152,8 @@ def main(argv=None):
 
 def _interactive(harness, mode):
     """Prompt loop: each line is a task; Ctrl-D exits, Ctrl-C stops the current run."""
-    print(f"ZILL Harness  model={harness.model}  mode={mode}\n"
+    dry = "  dry-run" if harness.policy.dry_run else ""
+    print(f"ZILL Harness  model={harness.model}  mode={mode}{dry}\n"
           f"jail: {harness.workdir}\nCtrl-D exits, Ctrl-C interrupts a run.")
     if harness.messages:
         print(f"resumed {len(harness.messages)} messages from {harness.session_path}")

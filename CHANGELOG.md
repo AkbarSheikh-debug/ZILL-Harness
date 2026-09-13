@@ -29,7 +29,23 @@ All notable changes to this project are documented here. The format follows
   thinking blocks are replayed verbatim.
 - **Gemini call ids:** ids issued by Gemini are echoed on the function call and its response.
 
+- **Risk and source on tools:** `@tool(..., risk=, source=)`. Core tools declare `read`,
+  `write` or `execute`, and `bash` commands are classified further as `network` or
+  `destructive`.
+- **Policy decisions:** `Policy.decide()` returns a `Decision` (allowed, reason, risk,
+  needs_approval). Destructive calls are denied even in yolo mode.
+- **`--dry-run`:** only reads run, for the agent and its sub-agents.
+- **Audit log:** `.zill/audit.jsonl` records every tool call's risk, decision, duration and
+  status, with arguments redacted.
+- **Events:** `session_start`, `session_end`, `provider_start`, `provider_end`,
+  `tool_blocked`, `compaction`, `error`. `tool_end` now carries `id` and `seconds`.
+- **Untrusted-data rules:** the system prompt treats tool output and files as data, never
+  instructions, and forbids revealing secrets.
+
 ### Changed
+- **Sub-agent approval:** `spawn_agent` is read-risk. The child's own calls are still gated
+  by the shared policy, so safe mode no longer asks twice.
+- **Session metadata:** `.meta.json` lists each tool's source and risk, and records dry-run.
 - The system prompt names the real shell the `bash` tool runs (`COMSPEC` on
   Windows) and asks for Windows command syntax there.
 - **Provider package:** the Gemini wire code moved to `zill/providers/gemini.py`, and

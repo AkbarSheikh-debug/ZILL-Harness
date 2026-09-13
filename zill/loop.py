@@ -15,8 +15,11 @@ Design rules:
     gets one last call with no tools.
   * Every tool call carries an id and its result repeats it, so results pair
     with calls by id, never by position. Providers that send no id get one.
+  * Events are plain dicts and consumers may ignore any kind: provider_start,
+    provider_end, assistant, tool_start, tool_blocked, tool_end.
 """
 
+import time
 import uuid
 
 from . import provider
@@ -27,43 +30,53 @@ def run_loop(model, system, messages, tools, on_event, before_tool,
     """Drive the model until it answers without tool calls; return that text.
 
     tools maps name -> Tool (with .spec and .run). on_event(kind, payload)
-    fires "assistant", "tool_start" and "tool_end". before_tool(call) returns
-    None to allow a call or a reason string to block it.
+    reports progress. before_tool(call) returns None to allow a call or a
+    reason string to block it.
     """
     specs = [t.spec for t in tools.values()]
     for _ in range(max_turns):
         if before_turn is not None:
             # Replace contents, not the binding, so the caller's list stays live.
             messages[:] = before_turn(messages)
-        reply = provider.complete(model, system, messages, specs)
-        for call in reply["tool_calls"]:
-            call["id"] = call.get("id") or f"call_{uuid.uuid4().hex[:12]}"
-        message = {"role": "assistant", "text": reply["text"], "tool_calls": reply["tool_calls"]}
-        if reply.get("provider_data"):  # adapter-private, replayed untouched
-            message["provider_data"] = reply["provider_data"]
-        messages.append(message)
-        on_event("assistant", reply)
+        reply = _call_model(model, system, messages, specs, on_event)
         if not reply["tool_calls"]:
             return reply["text"]
         for call in reply["tool_calls"]:
             on_event("tool_start", call)
-            result = _execute(call, tools, before_tool)
-            on_event("tool_end", {"name": call["name"], "result": result})
+            started = time.monotonic()
+            reason = before_tool(call)
+            if reason is not None:
+                result = f"BLOCKED: {reason}"
+                on_event("tool_blocked", {"id": call["id"], "name": call["name"],
+                                          "reason": reason})
+            else:
+                result = _execute(call, tools)
+            on_event("tool_end", {"id": call["id"], "name": call["name"], "result": result,
+                                  "seconds": round(time.monotonic() - started, 3)})
             messages.append({"role": "tool", "id": call["id"], "name": call["name"],
                              "text": result})
 
     messages.append({"role": "user", "text": "Turn limit reached; wrap up now."})
-    reply = provider.complete(model, system, messages, [])
-    messages.append({"role": "assistant", "text": reply["text"], "tool_calls": []})
+    return _call_model(model, system, messages, [], on_event)["text"]
+
+
+def _call_model(model, system, messages, specs, on_event):
+    """Make one model call, record the assistant message, and return the reply."""
+    on_event("provider_start", {"model": model, "messages": len(messages)})
+    reply = provider.complete(model, system, messages, specs)
+    on_event("provider_end", {"model": model, "usage": reply.get("usage") or {}})
+    for call in reply["tool_calls"]:
+        call["id"] = call.get("id") or f"call_{uuid.uuid4().hex[:12]}"
+    message = {"role": "assistant", "text": reply["text"], "tool_calls": reply["tool_calls"]}
+    if reply.get("provider_data"):  # adapter-private, replayed untouched
+        message["provider_data"] = reply["provider_data"]
+    messages.append(message)
     on_event("assistant", reply)
-    return reply["text"]
+    return reply
 
 
-def _execute(call, tools, before_tool):
-    """Run one tool call and return its result as a string, never raising."""
-    reason = before_tool(call)
-    if reason is not None:
-        return f"BLOCKED: {reason}"
+def _execute(call, tools):
+    """Run one allowed tool call and return its result as a string, never raising."""
     tool = tools.get(call["name"])
     if tool is None:
         return f"ERROR: unknown tool {call['name']}"
