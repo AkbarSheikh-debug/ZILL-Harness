@@ -52,7 +52,7 @@ class Env(unittest.TestCase):
 
 class SettingsTests(Env):
     def test_model_precedence(self):
-        self.assertEqual(settings.resolve(self.workdir)["model"], "gemini:gemini-3.1-pro-preview")
+        self.assertEqual(settings.resolve(self.workdir)["model"], "gemini:gemini-3.6-flash")
         self.user(model="user:model")
         self.assertEqual(settings.resolve(self.workdir)["model"], "user:model")
         self.project(model="project:model")
@@ -284,7 +284,7 @@ class CostAndSlashTests(Env):
         self.assertEqual(harness.policy.mode, "read-only")
         self.assertIn("mode must be one of", out)
         self.assertIn("needs ANTHROPIC_API_KEY", out)  # refused: no key for that provider
-        self.assertEqual(harness.model, "gemini:gemini-3.1-pro-preview")
+        self.assertEqual(harness.model, "gemini:gemini-3.6-flash")
         self.assertEqual((harness.messages, harness.session_path), ([], None))
         self.assertIn("unknown command /bogus", out)
 

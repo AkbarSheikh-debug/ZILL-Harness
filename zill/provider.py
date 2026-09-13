@@ -35,7 +35,7 @@ from .providers import anthropic, gemini, openai_compat
 # name: (adapter, base URL, key variable or None, default model or None)
 PROVIDERS = {
     "gemini": (gemini, "https://generativelanguage.googleapis.com/v1beta",
-               "GEMINI_API_KEY", "gemini-3.1-pro-preview"),
+               "GEMINI_API_KEY", "gemini-3.6-flash"),  # Flash: usable on free-tier keys
     "anthropic": (anthropic, "https://api.anthropic.com/v1", "ANTHROPIC_API_KEY", "claude-opus-5"),
     "openai": (openai_compat, "https://api.openai.com/v1", "OPENAI_API_KEY", "gpt-5"),
     "openrouter": (openai_compat, "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", None),
@@ -44,7 +44,7 @@ PROVIDERS = {
     "ollama": (openai_compat, "http://localhost:11434/v1", None, None),
     "lmstudio": (openai_compat, "http://localhost:1234/v1", None, None),
 }
-DEFAULT_MODEL = "gemini:gemini-3.1-pro-preview"
+DEFAULT_MODEL = "gemini:gemini-3.6-flash"
 OPENAI_NAME = re.compile(r"(gpt-|chatgpt-|o\d)")
 
 

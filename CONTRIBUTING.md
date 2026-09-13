@@ -38,6 +38,13 @@ put interoperability at the edges. The full plan is in [ROADMAP.md](ROADMAP.md).
    python -m unittest discover          # offline; tests/fake.py scripts the model
    python -c "import pathlib; print(sum(len(p.read_text(encoding='utf-8').splitlines()) for p in pathlib.Path('zill').glob('*.py')))"
    ```
+   If your change affects how a real model works with ZILL (prompts, tools, providers,
+   policy), also run the relevant evals, which spend your own API quota:
+   ```sh
+   python evals/run.py -m gemini:gemini-3.6-flash --only security,coding
+   ```
+   and add a case to `evals/run.py` when you add a capability. Checks must be mechanical,
+   such as files, test runs or audit entries, never a model's opinion.
 6. **Commit** with a clear imperative message (`Add OpenAI-compatible provider`).
 7. **Open a pull request** against `main` and fill in the template.
 
