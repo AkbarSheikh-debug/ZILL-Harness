@@ -28,18 +28,19 @@ import json
 import sys
 
 from . import commands, config, cost, credentials, provider, settings, skills
-from .harness import COMPACT_AT
 from .profiles import PROFILES
 from .security import MODES
 
 ARGS_CLIP = 100  # characters of a tool call's JSON arguments shown
 RESULT_CLIP = 120  # characters of a result's first line shown
+BAR = 30  # characters in the /context fill bar
 DIM, RESET = "\033[2m", "\033[0m"
 PROMPT = "zill> "
 SLASH = {
     "/help": "show these commands",
+    "/context": "how full the context window is, by part",
     "/cost": "tokens used and estimated cost",
-    "/model": "show the model, or switch: /model anthropic:claude-opus-5",
+    "/model": "pick a model from a list, or switch: /model anthropic:claude-opus-5",
     "/mode": "show the mode, or switch: /mode safe | yolo | read-only",
     "/compact": "summarise older turns now to free context",
     "/clear": "start a fresh conversation (new session)",
@@ -234,15 +235,10 @@ def _slash(harness, line):
         print("\n".join(f"{name:<13} {text}" for name, text in SLASH.items()))
     elif command == "/cost":
         print(cost.describe(harness.model, harness.usage, _prices()))
+    elif command == "/context":
+        _show_context(harness)
     elif command == "/model":
-        problem = arg and provider.check_model(arg)
-        missing = arg and not problem and provider.missing_key(arg)
-        if problem or missing:
-            print(problem or f"{arg} needs {missing}: run `zill setup` first")
-        elif arg:
-            harness.model = arg
-            harness.budget_tokens = int(provider.model_info(arg).get("context_window",
-                                                                     1_000_000) * COMPACT_AT)
+        _pick_model(harness, arg)
         print(f"model: {harness.model}")
     elif command == "/mode":
         if arg and arg not in MODES:
@@ -279,6 +275,73 @@ def _slash(harness, line):
     return True
 
 
+def _percent(used):
+    """Return the share of the window the next request fills, as a percentage."""
+    return 100 * used["total"] / used["window"]
+
+
+def _show_context(harness):
+    """Print a fill bar and the estimated tokens held by each part of the next request."""
+    used = harness.context_usage()
+    filled = min(BAR, round(BAR * used["total"] / used["window"]))
+    print(f"context  {harness.model}\n"
+          f"  [{'#' * filled}{'.' * (BAR - filled)}] {_percent(used):.1f}% "
+          f"of {used['window']:,} tokens (estimated)")
+    rows = [("system prompt", used["system"]), (f"tools ({len(harness.tools)})", used["tools"]),
+            (f"messages ({len(harness.messages)})", used["messages"]),
+            ("total", used["total"]), ("free", max(0, used["window"] - used["total"]))]
+    for label, tokens in rows:
+        print(f"  {label:<16}{tokens:>12,}")
+    print(f"  auto-compact once messages pass {used['compact_at']:,} tokens (/compact to force)")
+    if used["reported"]:
+        print(f"  last request: {used['reported']:,} input tokens, as reported by the provider")
+
+
+def _model_choices(current):
+    """Return the models /model lists: each provider's default, then current if it is not one.
+
+    The defaults come first so a number means the same model before and after a switch.
+    """
+    choices = [f"{name}:{default}" for name, (_, _, _, default) in provider.PROVIDERS.items()
+               if default]
+    return choices if current in choices else choices + [current]
+
+
+def _pick_model(harness, arg):
+    """Switch to arg (a list number or provider:model); with no arg, list and ask."""
+    choices = _model_choices(harness.model)
+    if not arg:
+        for number, model in enumerate(choices, 1):
+            missing = provider.missing_key(model)
+            print(f"{'*' if model == harness.model else ' '} {number}. {model}"
+                  f"{f'  (needs {missing})' if missing else ''}")
+        print("  or any provider:model, e.g. ollama:qwen3, openrouter:MODEL")
+        if not sys.stdin.isatty():
+            return
+        try:
+            arg = input("number or name (Enter keeps the current model): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if not arg:
+            return
+    if arg.isdigit():
+        if not 1 <= int(arg) <= len(choices):
+            print(f"choose a number from 1 to {len(choices)}")
+            return
+        arg = choices[int(arg) - 1]
+    problem = provider.check_model(arg)
+    missing = not problem and provider.missing_key(arg)
+    if problem or missing:
+        print(problem or f"{arg} needs {missing}: run `zill setup` first")
+        return
+    harness.set_model(arg)
+    used = harness.context_usage()
+    if used["messages"] > used["compact_at"]:
+        print(f"note: this conversation (~{used['messages']:,} tokens) is past {arg}'s "
+              f"compaction point, so it will be summarised before the next turn")
+
+
 def _interactive(harness):
     """Prompt loop: each line is a task or a /command; Ctrl-D exits, Ctrl-C stops a run."""
     dry = "  dry-run" if harness.policy.dry_run else ""
@@ -288,7 +351,9 @@ def _interactive(harness):
         print(f"resumed {len(harness.messages)} messages from {harness.session_path}")
     while True:
         try:
-            task = input(PROMPT).strip()
+            meter = f"zill [{_percent(harness.context_usage()):.0f}%]> "
+            # A Windows pipe can open with a byte-order mark that would hide a leading "/".
+            task = input(meter if harness.messages else PROMPT).lstrip("﻿").strip()
         except EOFError:
             print()
             return 0

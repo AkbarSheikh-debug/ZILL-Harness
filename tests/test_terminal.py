@@ -288,6 +288,50 @@ class CostAndSlashTests(Env):
         self.assertEqual((harness.messages, harness.session_path), ([], None))
         self.assertIn("unknown command /bogus", out)
 
+    def test_context_command_breaks_down_the_window(self):
+        harness = settings.make_harness(settings.resolve(self.workdir), persist=False)
+        reply = {**text("hi"), "usage": {"input": 4321, "output": 5}}
+        with FakeProvider(reply):
+            harness.run("hello " * 400)
+        used = harness.context_usage()
+        self.assertEqual(used["window"], 1_048_576)
+        self.assertEqual(used["total"], used["system"] + used["tools"] + used["messages"])
+        self.assertGreater(used["messages"], 400)
+        self.assertEqual(used["reported"], 4321)
+        _, out = self.slash(harness, "/context")
+        self.assertIn("of 1,048,576 tokens", out)
+        self.assertIn("messages (2)", out)
+        self.assertIn("4,321 input tokens", out)
+        harness.clear()
+        self.assertEqual(harness.context_usage()["reported"], 0)
+
+    def test_model_picker_lists_and_switches_by_number(self):
+        harness = settings.make_harness(settings.resolve(self.workdir), persist=False)
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test-123456"}):
+            _, out = self.slash(harness, "/model")  # stdin is not a tty: list only
+            self.assertIn("* 1. gemini:gemini-3.6-flash", out)
+            self.assertIn("2. anthropic:claude-opus-5\n", out)
+            self.assertIn("(needs OPENAI_API_KEY)", out)
+            _, out = self.slash(harness, "/model 99", "/model 3")
+            self.assertIn("choose a number from 1 to", out)
+            self.assertIn("needs OPENAI_API_KEY", out)
+            self.assertEqual(harness.model, "gemini:gemini-3.6-flash")
+            self.slash(harness, "/model ollama:qwen3")
+            _, out = self.slash(harness, "/model")  # numbers stay put; the custom model is last
+            self.assertIn("  1. gemini:gemini-3.6-flash", out)
+            self.assertIn("* 5. ollama:qwen3", out)
+            self.slash(harness, "/model 2")
+        self.assertEqual(harness.model, "anthropic:claude-opus-5")
+        self.assertEqual(harness.budget_tokens,
+                         int(anthropic.model_info("claude-opus-5")["context_window"] * 0.6))
+
+    def test_model_switch_warns_when_the_conversation_is_past_the_new_budget(self):
+        harness = settings.make_harness(settings.resolve(self.workdir), persist=False)
+        harness.messages = [{"role": "user", "text": "x" * 400_000}]  # ~100k tokens
+        with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": "sk-deep-test-123456"}):
+            _, out = self.slash(harness, "/model deepseek:deepseek-chat")
+        self.assertIn("will be summarised before the next turn", out)
+
     def test_compact_command_summarises(self):
         harness = settings.make_harness(settings.resolve(self.workdir), persist=False)
         with FakeProvider(*([call("list_files")] * 4 + [text("done"), text("SUMMARY")])):

@@ -294,6 +294,29 @@ zill --help && zill doctor && zill inspect
 It also confirms that the core has no third-party imports, no secrets are in
 the repo or logs, and all acceptance checks above still pass.
 
+### v1.1: Interactive terminal
+
+The goal is a prompt loop that feels as helpful as the best agent terminals, within
+the same budgets: standard library only, and no full-screen UI.
+
+- [x] **`/context`:** a fill bar and the estimated tokens in the system prompt, tools and
+      messages against the model's window, the auto-compact point, and the input tokens the
+      provider reported for the latest call.
+- [x] **Context meter in the prompt:** `zill [21%]>` once a conversation has started.
+- [x] **`/model` picker:** with no argument it lists the current model and each provider's
+      default, marking missing keys; `/model 2` or `/model provider:model` switches. A switch
+      resizes the compaction budget and warns when the conversation is past the new one.
+- [ ] **Input history and tab completion:** `readline` where the platform has it; plain
+      `input()` on Windows, whose console already recalls lines.
+- [ ] **`/resume` inside the loop:** pick a saved session without leaving.
+- [ ] **`/init`:** the agent reads the repo and drafts `.zill/project.json`.
+- [ ] **`/memory`:** show the saved project facts.
+- [ ] **`!command`:** run a shell command under Policy and add its output to the context.
+- [ ] **`@path` mentions:** attach a file's contents to the prompt.
+
+**Acceptance:** each command is covered in `tests/test_terminal.py` with no key and no
+network, and the core stays under 3,500 lines.
+
 ---
 
 ## 6. Later (after v1.0, only if the design stays simple)
