@@ -13,7 +13,8 @@ function Run { & $args[0] $args[1..($args.Length - 1)]; if ($LASTEXITCODE) { thr
 function Find-Python {
     foreach ($py in @('py', 'python', 'python3')) {
         if (Has $py) {
-            & $py -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>$null
+            # ssl too: a conda Python run outside its environment cannot load it, and ZILL needs HTTPS.
+            & $py -c 'import sys, ssl; sys.exit(sys.version_info < (3, 10))' 2>$null
             if ($LASTEXITCODE -eq 0) { return $py }
         }
     }
@@ -31,7 +32,8 @@ function Add-UserPath($dir) {
 $py = Find-Python
 if (Has 'uv') {
     Say 'installing with uv'
-    Run uv tool install --force $source
+    # uv's own Python, not whatever is on PATH (an Anaconda base Python breaks HTTPS).
+    Run uv tool install --force --managed-python $source
     uv tool update-shell *> $null
 } elseif (Has 'pipx') {
     Say 'installing with pipx'
@@ -45,7 +47,7 @@ if (Has 'uv') {
     Say 'no Python 3.10+ found; installing uv (it brings its own Python)'
     Invoke-RestMethod https://astral.sh/uv/install.ps1 -ErrorAction Stop | Invoke-Expression
     $env:Path = "$HOME\.local\bin;$env:Path"
-    Run uv tool install --force --python 3.12 $source
+    Run uv tool install --force --managed-python --python 3.12 $source
     uv tool update-shell *> $null
 }
 
