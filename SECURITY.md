@@ -54,6 +54,11 @@ where its safety boundary is:
 4. Destructive operations are denied by default.
 5. Secrets never go into prompts or tool descriptions, and are never printed or logged.
 6. Every tool, whatever its source, goes through Policy.
-7. Python plugins (planned) are trusted code with the same privileges as ZILL.
-   MCP servers (planned) are external processes whose output is untrusted.
-8. Run untrusted agents inside an OS-level or container sandbox.
+7. Python plugins are trusted code with the same privileges as ZILL. Enabling
+   one is a trust decision, not a sandbox. MCP servers are external processes,
+   and their tool descriptions, annotations and output are untrusted data; an
+   annotation never lowers a tool's risk.
+8. Nothing shipped inside a project (`.zill/mcp.json`, `.zill/plugins/`) runs
+   until the user approves it. Approvals live in `~/.zill/trust.json`, pinned to
+   a fingerprint, so a changed command or file needs approval again.
+9. Run untrusted agents inside an OS-level or container sandbox.

@@ -1,0 +1,9 @@
+{
+  "name": "local_notes",
+  "version": "0.1.0",
+  "description": "A credential-free connector to a local notes folder: list, read and create Markdown notes in ./notes.",
+  "entrypoint": "connector:register",
+  "kind": "connector",
+  "permissions": ["read", "write"],
+  "credentials": []
+}

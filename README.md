@@ -139,6 +139,49 @@ zill undo 3f2a1bc -d ./myproject    # restore a specific snapshot
 In interactive mode, use `/undo`, `/checkpoints`, and `/todo`. `/todo` shows
 the checklist the agent keeps during long tasks.
 
+### Extend it
+
+| Concept | What it is |
+|---|---|
+| **Tool** | One callable operation the model can use. |
+| **Skill** | Instructions in `skills/<name>/SKILL.md`, loaded when relevant. Not code. |
+| **MCP server** | An external program that offers tools over the Model Context Protocol. |
+| **Plugin** | Local Python code that registers tools. |
+| **Connector** | A plugin that integrates a service and declares the credentials it needs. |
+| **Sub-agent** | A child agent with a clean context, for self-contained tasks. |
+
+All of these reach the model as tools, and every tool passes through the same
+policy, dry-run and audit log.
+
+**MCP servers:**
+
+```sh
+zill mcp add github --env GITHUB_TOKEN='${GITHUB_TOKEN}' -- npx -y @modelcontextprotocol/server-github
+zill mcp list --tools          # tools appear as mcp__github__<tool>
+zill mcp trust NAME            # approve a server that came with a cloned project
+zill mcp serve --tools read_file,grep,list_files   # offer ZILL's tools to another MCP client
+```
+
+**Plugins and connectors:**
+
+```sh
+cp -r examples/plugins/hello_plugin .zill/plugins/hello
+zill plugin enable hello       # shows permissions, then asks
+zill plugin list
+```
+
+A plugin is a folder with a `manifest.json` and a module whose
+`register(registry)` calls `registry.add_tool(...)`. See
+`examples/plugins/hello_plugin` and `examples/connectors/local_notes`.
+
+**Trust:** nothing in a project directory runs until you approve it. MCP servers
+and plugins are approved per exact configuration or file contents in
+`~/.zill/trust.json`, so an edit needs approval again. Python plugins run with
+ZILL's privileges, so enable only code you trust.
+
+**Web:** `web_fetch` is always available. `web_search` appears when
+`BRAVE_API_KEY` or `TAVILY_API_KEY` is set.
+
 ### See what happened
 
 Every tool call is written to `.zill/audit.jsonl` with its risk
@@ -157,7 +200,6 @@ the agent did and why.
 | `tools.py` | The `@tool` decorator and six core tools: read, write, edit, bash, list, grep. File paths are confined to the workdir. |
 | `security.py` | `Policy.decide()`: classifies each call by risk (bash by what the command does), denies destructive calls in every mode, and applies `read-only`, `safe`, `yolo` and dry-run. |
 | `audit.py` | `.zill/audit.jsonl`: one redacted line per tool call with risk, decision, duration and status. |
-| `config.py` | `.zill/project.json`: the project's verify command and hooks, validated with clear errors. |
 | `hooks.py` | Before and after hooks around state-changing tools, with safe `{path}` substitution. |
 | `checkpoints.py` | Shadow-git snapshots before every change, with undo one step at a time. Your own `.git` is untouched. |
 | `todo.py` | The checklist tool. It survives compaction and resume. |
@@ -173,6 +215,10 @@ the agent did and why.
 | `harness.py` | `Harness` wires everything to one workdir and flushes every message to disk before the next step. |
 | `cli.py` | The front door: headless `-p`, the interactive loop, the approval prompt, and `--resume`. |
 | `fleet.py` | `run_fleet`: many harnesses in many directories on a thread pool. |
+| `web.py` | `web_fetch` (HTML to text, bounded) and, with a key, `web_search`. |
+| `trust.py` | Approvals for MCP servers and plugins, pinned to fingerprints, kept outside every project. |
+| `mcp/` | Edge package: protocol, stdio client, tool bridge, `zill mcp serve`, and the `zill mcp` commands. |
+| `plugins/` | Edge package: manifests, the restricted registry, loading, and the `zill plugin` commands. |
 
 ## Use it as a library
 

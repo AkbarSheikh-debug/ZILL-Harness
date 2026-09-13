@@ -72,6 +72,23 @@ All notable changes to this project are documented here. The format follows
   join `/todo /undo /checkpoints`.
 - **CI:** it runs `zill inspect --json` and `zill doctor --json` and checks that the output parses.
 
+- **MCP client:** servers in `.zill/mcp.json` run over stdio (spec 2025-06-18: initialize,
+  ping, tools/list with pagination, tools/call) and appear as `mcp__<server>__<tool>`, with
+  timeouts, crash recovery, an explicit environment and a per-server stderr log.
+- **MCP server:** `zill mcp serve` offers ZILL's tools to other MCP clients, through
+  Policy and the audit log, read-only by default.
+- **`zill mcp` commands:** `add | trust | list | remove | serve`.
+- **Plugins and connectors:** manifests with declared permissions and credentials, a
+  restricted registry, `zill plugin list | inspect | enable | disable`, and namespaced tools
+  (`plugin__…`, `connector__…`).
+- **Trust:** `~/.zill/trust.json` approves MCP servers and plugins by fingerprint, so
+  nothing shipped inside a project runs until the user approves it, and edits need
+  re-approval.
+- **Web tools:** `web_fetch` (network risk), and `web_search` with a Brave or Tavily key.
+- **Examples:** `examples/plugins/hello_plugin` and `examples/connectors/local_notes`.
+- **Doctor and inspect:** `zill doctor` reports unapproved MCP servers and changed plugins,
+  and `zill inspect` lists extension tools and their notes.
+
 ### Changed
 - **`cli.py` split:** subcommands moved from `cli.py` to `commands.py`; run settings are
   resolved in `settings.py`.

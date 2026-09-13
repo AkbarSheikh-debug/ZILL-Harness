@@ -223,32 +223,37 @@ The goal is a CLI that is pleasant for people and usable from scripts.
 
 The goal is to connect ZILL to everything without growing the core.
 
-- [ ] **MCP protocol (`zill/mcp/`):** JSON-RPC primitives in one place. Pin
-      one MCP spec revision and document the supported subset: `initialize`,
-      `tools/list`, `tools/call`, and shutdown.
-- [ ] **MCP client (stdio):** launches the configured server, performs the
-      handshake, discovers tools, and wraps them as `mcp__<server>__<tool>`
-      Tools behind Policy. If the server crashes, the model gets
-      `ERROR: MCP server <name> disconnected: …` and the harness never crashes.
-      The server only receives environment variables that were explicitly selected.
-- [ ] **`zill mcp add | list | remove`**, with servers stored in `.zill/mcp.json`.
-- [ ] **MCP server:** `zill mcp serve --tools read_file,grep,list_files` exposes
-      ZILL's tools through the same jail and Policy. It exposes read-only tools by
-      default, and a denied call returns a proper MCP error.
-- [ ] **Plugins (`zill/plugins/`):** a `manifest.json` (name, version, description,
-      entrypoint, permissions), and `register(registry)` receives a restricted
-      registry (`add_tool`, `add_skill`) rather than the Harness itself. Plugins
-      are discovered in `.zill/plugins/` and `~/.zill/plugins/` but **never run
-      until enabled**. Commands: `zill plugin list | enable | disable | inspect`,
-      which show requested permissions before enabling.
-- [ ] **Connectors:** plugins that also declare credentials (`token_env`), network
-      use, and read/write risk. If a credential is missing, the model gets
-      `ERROR: <name> connector is not configured`.
-- [ ] **Examples:** `examples/plugins/hello_plugin/` (`hello(name)`) and a
-      credential-free `examples/connectors/local_notes/` (`list_notes`,
-      `read_note`, `create_note`).
-- [ ] **`web_fetch` builtin** (network risk), plus an optional `web_search` when a
-      Brave or Tavily key is set.
+- [x] **MCP protocol (`zill/mcp/protocol.py`):** JSON-RPC primitives in one place, pinned to
+      spec revision `2025-06-18` (and `2025-03-26` and `2024-11-05` servers accepted). The
+      supported subset is `initialize`, `notifications/initialized`, `ping`, `tools/list`
+      with pagination, and `tools/call`.
+- [x] **MCP client (stdio):** launches the server, performs the handshake, answers server
+      pings, discovers tools, and wraps them as `mcp__<server>__<tool>` Tools behind Policy.
+      Schemas are reduced to the subset every provider accepts. A crash gives the model
+      `ERROR: MCP server <name> disconnected …`, and the next call restarts the server.
+      Every request has a timeout. The server receives only basic environment variables
+      plus the ones configured (`${VAR}` resolved), and its stderr goes to `.zill/mcp/<name>.log`.
+- [x] **`zill mcp add | trust | list [--tools] | remove`**, with servers stored in
+      `.zill/mcp.json`. **Servers only start once approved:** approvals live in
+      `~/.zill/trust.json` and pin a fingerprint of the entry, so a cloned repo's config never
+      runs by itself and any edit needs re-approval.
+- [x] **MCP server:** `zill mcp serve --tools read_file,grep,list_files` exposes ZILL's tools
+      through the same jail, Policy and audit log. It exposes read-only tools and uses
+      read-only mode by default. A denied call is an `isError` result, and an unknown tool is
+      a JSON-RPC error.
+- [x] **Plugins (`zill/plugins/`):** `manifest.json` (name, version, description, entrypoint,
+      kind, permissions, credentials), and `register(registry)` receives a restricted registry
+      (`add_tool`, `credential`, `workdir`). A tool's risk must be a declared permission.
+      Plugins are discovered in `.zill/plugins/` and `~/.zill/plugins/` and **never imported
+      until enabled**. The enablement pins a fingerprint of every file, so an edit disables the
+      plugin. Commands: `zill plugin list | inspect | enable | disable`. `add_skill` is deferred;
+      skills stay folders.
+- [x] **Connectors:** plugins with `"kind": "connector"` that declare `credentials`. If one is
+      missing, the tools answer `ERROR: <name> connector is not configured: set …`.
+- [x] **Examples:** `examples/plugins/hello_plugin/` and the credential-free
+      `examples/connectors/local_notes/`.
+- [x] **Web tools:** a `web_fetch` builtin (network risk, HTML to text, size-bounded, http or
+      https only), plus `web_search` when a Brave or Tavily key is set.
 
 **Acceptance:** a local test MCP server (`add`, `echo`, `failing_tool`) proves
 start, handshake, discovery, calls, errors, shutdown, and recovery after

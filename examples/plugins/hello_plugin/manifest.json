@@ -1,0 +1,8 @@
+{
+  "name": "hello",
+  "version": "0.1.0",
+  "description": "The smallest possible ZILL plugin: one read-only tool that greets.",
+  "entrypoint": "plugin:register",
+  "kind": "plugin",
+  "permissions": ["read"]
+}

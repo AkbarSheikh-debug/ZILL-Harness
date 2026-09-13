@@ -171,13 +171,16 @@ def main(argv=None):
     except RuntimeError as err:
         return _fail(err, quiet)
     if not quiet:
-        for note in resolved["notes"]:
+        for note in resolved["notes"] + harness.notes:
             print(f"note: {note}", file=sys.stderr)
-    if args.resume and not harness.resume() and not quiet:
-        print("no session to resume; starting fresh", file=sys.stderr)
-    if task:
-        return _headless(harness, task, quiet)
-    return _interactive(harness)
+    try:
+        if args.resume and not harness.resume() and not quiet:
+            print("no session to resume; starting fresh", file=sys.stderr)
+        if task:
+            return _headless(harness, task, quiet)
+        return _interactive(harness)
+    finally:
+        harness.close()
 
 
 def _fail(err, as_json):
