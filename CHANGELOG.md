@@ -17,9 +17,32 @@ All notable changes to this project are documented here. The format follows
 - `<session>.meta.json` sidecar with the model, version, mode, tools and skills. It never contains secrets.
 - `zill.__version__`, which is also the package version source.
 
+- **Providers:** Anthropic Claude and OpenAI-compatible adapters (OpenAI,
+  OpenRouter, Groq, DeepSeek, Ollama, LM Studio), selected with
+  `-m provider:model`. Bare `claude-…`, `gpt-…` and `o3…` names are recognized.
+- **`zill setup`:** paste keys with hidden input, saved to `~/.zill/credentials.json`
+  (mode 0600). Starting `zill` with no key runs it automatically.
+- **Automatic model choice:** with no model set, ZILL uses the default of
+  the first provider that has a key.
+- **Redaction:** known secret values are masked in all terminal output.
+- **Anthropic prompt caching:** the system prompt and history are cached, and
+  thinking blocks are replayed verbatim.
+- **Gemini call ids:** ids issued by Gemini are echoed on the function call and its response.
+
 ### Changed
 - The system prompt names the real shell the `bash` tool runs (`COMSPEC` on
   Windows) and asks for Windows command syntax there.
+- **Provider package:** the Gemini wire code moved to `zill/providers/gemini.py`, and
+  `zill/provider.py` is now the dispatcher.
+- **Key lookup order:** the provider-specific variable (for example `GEMINI_API_KEY`) is read
+  before `ZILL_API_KEY`.
+- **Retries:** they wait at least as long as the server asks (`Retry-After` or
+  `retryDelay`), and a daily-quota 429 fails immediately instead of retrying.
+- **Line budget:** CI counts every module under `zill/` against the core budget (edge
+  packages separately).
+
+### Fixed
+- `zill` no longer crashes when stdout is not a real console stream.
 
 ## [0.1.0] - 2026-09-13
 

@@ -118,14 +118,17 @@ The goal is to make ZILL safe to change.
 
 The goal is to let users bring any API key.
 
-- [ ] `zill/providers/` with `gemini`, `anthropic` and `openai_compat` adapters.
-- [ ] **Prefixed model names:** `gemini:…`, `anthropic:…`, `openai:…`, `openrouter:…`,
+- [x] `zill/providers/` with `gemini`, `anthropic` and `openai_compat` adapters.
+- [x] **Prefixed model names:** `gemini:…`, `anthropic:…`, `openai:…`, `openrouter:…`,
       `groq:…`, `deepseek:…`, `ollama:…`, `lmstudio:…`, with presets for base URLs and key variables.
-- [ ] **`zill setup`:** paste keys once, and they are stored in `~/.zill/credentials.json`
+- [x] **`zill setup`:** paste keys once, and they are stored in `~/.zill/credentials.json`
       (file mode `0600` on Unix). Environment variables always take priority.
-- [ ] **Redaction utility:** every configured secret value is replaced with `[REDACTED]`
-      in CLI output, events, audit logs and tool-argument display.
-- [ ] Anthropic prompt caching for the system prompt and tools.
+      An interactive start with no key runs setup automatically.
+- [x] **Redaction utility:** every configured secret value is replaced with `[REDACTED]`
+      in CLI output and tool-argument display. Audit logs will use it in v0.4.
+- [x] Anthropic prompt caching for the system prompt and message history, with
+      thinking blocks replayed verbatim.
+- [x] **Quota-aware retries:** honor server-requested delays, and never retry a daily-quota 429.
 
 **Acceptance:** the same scenario suite passes against a fake adapter for each
 wire format, and a test proves that a secret never appears in printed output.

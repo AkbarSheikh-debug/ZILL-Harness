@@ -42,7 +42,7 @@ class Harness:
                  session_path=None, enable_subagents=True, persist=True, _depth=0):
         self.workdir = os.path.realpath(workdir)
         os.makedirs(self.workdir, exist_ok=True)
-        self.model = (model or os.environ.get("ZILL_MODEL") or provider.DEFAULT_MODEL)
+        self.model = model or provider.default_model()
         self.policy = policy or Policy("yolo")
         self.on_event = on_event or _ignore
         window = provider.model_info(self.model).get("context_window", 1_000_000)

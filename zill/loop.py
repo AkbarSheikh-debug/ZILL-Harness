@@ -38,8 +38,10 @@ def run_loop(model, system, messages, tools, on_event, before_tool,
         reply = provider.complete(model, system, messages, specs)
         for call in reply["tool_calls"]:
             call["id"] = call.get("id") or f"call_{uuid.uuid4().hex[:12]}"
-        messages.append({"role": "assistant", "text": reply["text"],
-                         "tool_calls": reply["tool_calls"]})
+        message = {"role": "assistant", "text": reply["text"], "tool_calls": reply["tool_calls"]}
+        if reply.get("provider_data"):  # adapter-private, replayed untouched
+            message["provider_data"] = reply["provider_data"]
+        messages.append(message)
         on_event("assistant", reply)
         if not reply["tool_calls"]:
             return reply["text"]

@@ -11,7 +11,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "Akbar Sheikh" }]
-keywords = ["agent", "llm", "coding-agent", "harness", "cli", "gemini"]
+keywords = ["agent", "llm", "coding-agent", "harness", "cli", "gemini", "claude", "openai", "ollama"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
@@ -30,8 +30,8 @@ Homepage = "https://github.com/AkbarSheikh-debug/ZILL-Harness"
 Issues = "https://github.com/AkbarSheikh-debug/ZILL-Harness/issues"
 Changelog = "https://github.com/AkbarSheikh-debug/ZILL-Harness/blob/main/CHANGELOG.md"
 
-[tool.setuptools]
-packages = ["zill"]
+[tool.setuptools.packages.find]
+include = ["zill", "zill.*"]
 
 [tool.setuptools.dynamic]
 version = { attr = "zill.__version__" }
