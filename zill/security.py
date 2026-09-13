@@ -15,13 +15,15 @@ Design rules:
   * Dry-run and read-only allow reads only. Safe mode asks the approver for
     everything else, and only an explicit True counts as yes.
   * The policy object is shared with sub-agents, so every rule, dry-run
-    included, applies to them too.
+    included, applies to them too. Project hook and verify commands are
+    decided like bash calls, so config files get no special trust.
 """
 
 import re
 from dataclasses import dataclass
 
 READ_TOOLS = {"read_file", "list_files", "grep"}  # for callers that pass no Tool
+COMMAND_TOOLS = {"bash", "hook", "verify"}  # calls whose "command" is a shell line
 MODES = ("read-only", "safe", "yolo")
 RISKS = ("read", "write", "execute", "network", "destructive", "credentialed")
 
@@ -67,10 +69,10 @@ def _refuse(call, reason):
 
 
 def classify(call, tool=None):
-    """Return the risk of call: the tool's declared risk, refined for bash."""
+    """Return the risk of call: the tool's declared risk, refined for shell commands."""
     name = call["name"]
     risk = tool.risk if tool is not None else ("read" if name in READ_TOOLS else "execute")
-    if name == "bash":
+    if name in COMMAND_TOOLS:
         command = str(call["args"].get("command", ""))
         if any(pattern.search(command) for pattern in _DENY):
             return "destructive"

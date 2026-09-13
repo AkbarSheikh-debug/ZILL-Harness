@@ -170,17 +170,21 @@ and the hostile-output test passes.
 
 The goal is that what ZILL builds actually works.
 
-- [ ] **Verify loop:** `"verify": "pytest -q"` in project config. The agent is
-      not done until the command passes, up to N attempts.
-- [ ] **Checkpoints:** before each state-changing tool, record the changed files
-      and their hashes, and snapshot them into a shadow git repo at
-      `.zill/checkpoints`. Your own git history is never touched.
-      `zill checkpoints` inspects them. `/undo` restores them only when the
-      user asks, never automatically.
-- [ ] **Todo tool:** a live checklist that is shown in the CLI and survives compaction.
-      There is deliberately no separate planner agent.
-- [ ] **Hooks:** run commands before or after a tool (for example, a formatter after
-      writes). A failing `before` hook blocks the call.
+- [x] **Verify loop:** `"verify": "pytest -q"` in `.zill/project.json`, or `--verify`.
+      The run is not done until the command passes, with up to 3 fix rounds. The command goes
+      through Policy like a bash call, so dry-run and approvals apply and nothing runs
+      without permission.
+- [x] **Checkpoints:** before each allowed state-changing tool, the work tree is snapshotted
+      into a shadow git repo at `.zill/checkpoints`, with git storing file hashes. Your own
+      git history is never touched. `zill checkpoints` lists them; `zill undo [id]` and
+      `/undo` restore them only when you ask. Every restore is itself snapshotted.
+      It needs git on PATH; without git, checkpoints are off (no file-copy fallback).
+- [x] **Todo tool:** a live checklist that is shown in the CLI, survives compaction and
+      `--resume`, and can be viewed with `/todo`. There is deliberately no planner agent.
+- [x] **Hooks:** commands in `.zill/project.json` run before or after matching
+      state-changing tools (for example, a formatter after writes). A failing `before` hook
+      blocks the call, and a failing `after` hook's output goes to the model. `{path}` is
+      only substituted for plain paths, and every hook goes through Policy.
 
 **Acceptance:** a scenario test shows a failing verify command sent back to
 the model, and an undo restoring the exact file contents.
