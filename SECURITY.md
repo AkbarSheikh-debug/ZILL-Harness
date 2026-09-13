@@ -27,6 +27,8 @@ where its safety boundary is:
 | Risk classification per call (`read`, `write`, `execute`, `network`, `destructive`), with destructive denied in every mode | Yes, but heuristic for `bash` |
 | Audit log of every tool call and policy decision, secrets redacted (`.zill/audit.jsonl`) | Yes |
 | Commands from `.zill/project.json` (verify, hooks) decided by the same policy as `bash`, never trusted automatically | Yes |
+| A project file can make the mode stricter but never looser (a cloned repo cannot switch you to `yolo`) | Yes |
+| Keys never printed by `doctor`, `inspect`, `--json`, or streamed output (redacted a line at a time) | Yes, for known key values |
 | Checkpoints before every change, restorable with `zill undo` | Yes, if git is installed. Only changes inside the workdir are captured, and ignored files are not. |
 | **`bash` sandboxed to the workdir** | **No.** A shell command can read or write anywhere your user account can. |
 | Protection from prompt injection in files or web content the agent reads | No |

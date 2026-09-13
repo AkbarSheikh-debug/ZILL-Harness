@@ -16,8 +16,13 @@ Design rules:
     sent, since current models reject them.
 """
 
-from .http import post_json
+import json
 
+from .http import post_json, post_sse
+
+# Stream deltas and the block field each one extends.
+DELTA_FIELDS = {"text_delta": "text", "thinking_delta": "thinking",
+                "signature_delta": "signature", "input_json_delta": "partial_json"}
 VERSION = "2023-06-01"
 MAX_TOKENS = 16000  # non-streaming requests stay well under HTTP timeouts
 WINDOWS = {"claude-haiku-4-5": 200_000}  # every other current model: 1M
@@ -60,8 +65,41 @@ def _to_wire(messages):
     return wire
 
 
-def complete(model, system, messages, tools, base, key):
-    """Send one conversation to Claude and return its neutral reply."""
+def _collect_stream(events, on_text):
+    """Rebuild a Messages API response from its stream events."""
+    blocks, usage, stop_reason = {}, {}, None
+    for event in events:
+        kind = event.get("type")
+        if kind == "message_start":
+            usage.update(event["message"].get("usage") or {})
+        elif kind == "content_block_start":
+            blocks[event["index"]] = dict(event["content_block"])
+        elif kind == "content_block_delta":
+            block, delta = blocks[event["index"]], event["delta"]
+            field = DELTA_FIELDS.get(delta.get("type"))
+            if field:  # unknown delta kinds (citations, ...) change no replayed field
+                block[field] = block.get(field, "") + delta[field]
+                if field == "text":
+                    on_text(delta["text"])
+        elif kind == "content_block_stop":
+            block = blocks[event["index"]]
+            if "partial_json" in block:
+                block["input"] = json.loads(block.pop("partial_json") or "{}")
+        elif kind == "message_delta":
+            stop_reason = (event.get("delta") or {}).get("stop_reason") or stop_reason
+            usage.update(event.get("usage") or {})
+        elif kind == "error":
+            raise RuntimeError(f"Anthropic stream error: {event.get('error')}")
+    return {"content": [blocks[i] for i in sorted(blocks)], "stop_reason": stop_reason,
+            "usage": usage}
+
+
+def complete(model, system, messages, tools, base, key, on_text=None):
+    """Send one conversation to Claude and return its neutral reply.
+
+    With on_text, the reply is streamed, text fragments go to on_text as
+    they arrive, and the content blocks are rebuilt exactly from the stream.
+    """
     body = {"model": model, "max_tokens": MAX_TOKENS, "cache_control": CACHE,
             "system": [{"type": "text", "text": system, "cache_control": CACHE}],
             "messages": _to_wire(messages)}
@@ -69,8 +107,12 @@ def complete(model, system, messages, tools, base, key):
         body["tools"] = [{"name": s["name"], "description": s["description"],
                           "input_schema": s["parameters"]}
                          for s in (t["schema"] for t in tools)]
-    data = post_json(f"{base}/messages", body,
-                     {"x-api-key": key, "anthropic-version": VERSION}, "Anthropic")
+    headers = {"x-api-key": key, "anthropic-version": VERSION}
+    if on_text is None:
+        data = post_json(f"{base}/messages", body, headers, "Anthropic")
+    else:
+        data = _collect_stream(post_sse(f"{base}/messages", {**body, "stream": True},
+                                        headers, "Anthropic"), on_text)
 
     blocks = data.get("content") or []
     text = "".join(b["text"] for b in blocks if b.get("type") == "text")

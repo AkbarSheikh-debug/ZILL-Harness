@@ -193,22 +193,28 @@ the model, and an undo restoring the exact file contents.
 
 The goal is a CLI that is pleasant for people and usable from scripts.
 
-- [ ] **Subcommands:** `zill run`, `resume`, `sessions`, `doctor`, `inspect`,
-      `checkpoints`, `fleet`. The existing `zill -p "…"` form keeps working.
-- [ ] **`zill doctor`:** checks the Python version, key presence (never the value),
-      workdir access, git, session, plugin and MCP config, and permissions, with
-      actionable fixes.
-- [ ] **`zill inspect`:** shows the model, workdir, policy, tools with their
-      source and risk, skills, MCP servers, plugins, connectors and session.
-      Never shows secrets.
-- [ ] **Config:** `~/.zill/config.json` and `.zill/project.json`, holding the
-      default model, mode, verify command, hooks, default skills, and the allowed
-      MCP servers, plugins and connectors. ZILL works fine without them.
-- [ ] **`--json`:** machine-readable final results, with no decorative output.
-- [ ] **Interactive slash commands:** `/help /undo /cost /model /mode /compact /clear /sessions /skills /todo`.
-- [ ] Streaming output, plus a token and cost meter.
-- [ ] **Profiles:** `coding`, `research`, `writing`, `reviewer`. Built from
-      existing pieces, never hardcoded into the loop.
+- [x] **Subcommands:** `zill run`, `resume`, `setup`, `sessions`, `doctor`, `inspect`,
+      `checkpoints`, `undo`, `fleet`. `zill -p "…"` and `zill "task"` keep working.
+- [x] **`zill doctor`:** checks the Python version, git, workdir access, config
+      validity, key presence (never the value), the chosen model's key, and
+      credentials-file permissions, each with a fix. MCP and plugin checks arrive with v0.7.
+- [x] **`zill inspect`:** shows the model, provider, key status, workdir, mode, profile,
+      verify, hooks, checkpoints, memory, tools with their source and risk, skills and
+      latest session, without calling a model or writing a file. Never shows secrets.
+- [x] **Config:** `~/.zill/config.json` (model, mode, profile, prices) and
+      `.zill/project.json` (model, mode, profile, verify, hooks), with unknown keys
+      rejected. A project file may only make the mode stricter. Allowed MCP servers and
+      plugins arrive with v0.7.
+- [x] **`--json`:** one result object (result, usage, cost, session, todo) or one error
+      object, with no decorative output.
+- [x] **Interactive slash commands:** `/help /cost /model /mode /compact /clear /todo /undo
+      /checkpoints /sessions /skills /exit`.
+- [x] **Streaming and cost:** output streams on a terminal for all three adapters,
+      printed a line at a time so redaction still works. A token and cost meter covers
+      `/cost`, the headless summary and `--json`. Built-in prices cover documented Anthropic
+      models only; others can be added under `prices`.
+- [x] **Profiles:** `coding`, `research`, `writing`, `reviewer`. Each is a prompt, a tool
+      allowlist and a strictest mode, never hardcoded into the loop.
 
 **Acceptance:** `zill --help`, `zill doctor` and `zill inspect` run in CI, and the
 `--json` output parses.

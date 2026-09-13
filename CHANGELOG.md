@@ -55,7 +55,28 @@ All notable changes to this project are documented here. The format follows
   patterns) and are written to the audit log.
 - **`after_tool` socket:** `run_loop` gains `after_tool(call, result)`.
 
+- **Subcommands:** `zill run "task"`, `zill resume`, `zill doctor`, `zill inspect`,
+  `zill sessions`, `zill fleet jobs.json`. `zill -p` still works.
+- **`--json`:** headless runs print one object with the result, model, session, usage,
+  cost and todo; errors are JSON too.
+- **`--profile`:** `coding`, `reviewer`, `research` or `writing` narrows the prompt, tools
+  and mode.
+- **Config:** `~/.zill/config.json` sets defaults (model, mode, profile, prices), and
+  `.zill/project.json` gains `model`, `mode` and `profile`. Unknown keys are errors, and a
+  project may only tighten the mode.
+- **Streaming:** Gemini, Anthropic and OpenAI-compatible adapters stream on a terminal,
+  and text is printed a line at a time so secret redaction stays exact.
+- **Cost meter:** usage totals per harness, `/cost`, a summary after headless runs, and
+  `cost_usd` in `--json`, from documented prices only.
+- **Slash commands:** `/help /cost /model /mode /compact /clear /sessions /skills /exit`
+  join `/todo /undo /checkpoints`.
+- **CI:** it runs `zill inspect --json` and `zill doctor --json` and checks that the output parses.
+
 ### Changed
+- **`cli.py` split:** subcommands moved from `cli.py` to `commands.py`; run settings are
+  resolved in `settings.py`.
+- **System prompt separator:** the skills catalog and extra prompt text are now separated
+  by a blank line (they were run together).
 - **Sub-agent approval:** `spawn_agent` is read-risk. The child's own calls are still gated
   by the shared policy, so safe mode no longer asks twice.
 - **Session metadata:** `.meta.json` lists each tool's source and risk, and records dry-run.

@@ -15,7 +15,8 @@ Design rules:
     format; nothing here parses a vendor's JSON.
 
 The provider contract (what every adapter honours):
-  complete(model, system, messages, tools, base, key) -> {"text", "tool_calls", "usage"}
+  complete(model, system, messages, tools, base, key, on_text=None)
+      -> {"text", "tool_calls", "usage"}; with on_text, stream and report text fragments
     messages: {"role": "user", "text"}
               {"role": "assistant", "text", "tool_calls": [{"id", "name", "args", ...}],
                "provider_data"?}
@@ -83,12 +84,16 @@ def model_info(model):
     return adapter.model_info(model_id)
 
 
-def complete(model, system, messages, tools):
-    """Send one conversation to model's provider and return the neutral reply."""
+def complete(model, system, messages, tools, on_text=None):
+    """Send one conversation to model's provider and return the neutral reply.
+
+    With on_text, the reply streams and on_text receives each text fragment.
+    """
     name, adapter, base, key_var, model_id = resolve(model)
     key = None
     if key_var:
         key = credentials.get(key_var) or credentials.get("ZILL_API_KEY")
         if not key:
             raise RuntimeError(f"No API key for {name}. Run `zill setup`, or set {key_var}.")
-    return adapter.complete(model_id, system, messages, tools, base=base, key=key)
+    return adapter.complete(model_id, system, messages, tools, base=base, key=key,
+                            on_text=on_text)

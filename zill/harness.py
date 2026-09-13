@@ -55,7 +55,8 @@ class Harness:
     def __init__(self, workdir=".", model=None, policy=None, extra_tools=None,
                  system_extra="", on_event=None, budget_tokens=None, max_turns=120,
                  session_path=None, enable_subagents=True, persist=True, verify=None,
-                 hooks=None, checkpoints=True, _depth=0, _audit_label=None):
+                 hooks=None, checkpoints=True, allowed_tools=None, stream=False,
+                 _depth=0, _audit_label=None):
         self.workdir = os.path.realpath(workdir)
         os.makedirs(self.workdir, exist_ok=True)
         self.model = model or provider.default_model()
@@ -77,6 +78,8 @@ class Harness:
         self.hooks = project.get("hooks", []) if hooks is None else hooks
         self.checkpoints = Checkpoints(self.workdir) if checkpoints else None
         self.todo = ""
+        self.stream = stream
+        self.usage = {"calls": 0, "input": 0, "output": 0}  # model calls this harness made
 
         self.tools = {t.name: t for t in core_tools(self.workdir)}
 
@@ -99,14 +102,18 @@ class Harness:
                 return Harness(self.workdir, model=self.model, policy=self.policy,
                                on_event=self.on_event, budget_tokens=self.budget_tokens,
                                max_turns=max_turns, persist=False, verify="",
-                               hooks=self.hooks, checkpoints=checkpoints, _depth=depth,
+                               hooks=self.hooks, checkpoints=checkpoints,
+                               allowed_tools=allowed_tools, _depth=depth,
                                _audit_label=f"{self.audit_label()} (sub-agent)")
 
             spawn = subagent_tool(make_child, depth=_depth)
             self.tools[spawn.name] = spawn
+        if allowed_tools is not None:  # a profile narrows the built-in tools
+            self.tools = {n: t for n, t in self.tools.items() if n in allowed_tools}
         self.tools.update({t.name: t for t in extra_tools or []})
-        self.system = memory.build_system_prompt(
-            self.workdir, skills.catalog_prompt(self.workdir) + system_extra)
+        extra = "\n\n".join(part for part in (skills.catalog_prompt(self.workdir), system_extra)
+                            if part)
+        self.system = memory.build_system_prompt(self.workdir, extra)
 
     def resume(self, path=None):
         """Load a session (the latest by default); return True if it had messages."""
@@ -131,6 +138,10 @@ class Harness:
 
         def on_event(kind, payload):
             self._flush()
+            if kind == "provider_end":
+                self.usage["calls"] += 1
+                for field in ("input", "output"):
+                    self.usage[field] += payload["usage"].get(field, 0)
             if kind == "tool_end":
                 call, tool_obj, decision = self._pending.pop(
                     payload["id"], ({"name": payload["name"], "args": {}}, None, None))
@@ -159,20 +170,13 @@ class Harness:
 
         def before_turn(messages):
             self._flush()
-            compacted = context.compact(self.model, messages, self.budget_tokens)
-            if compacted is not messages:
-                if self.todo:  # the plan must outlive the details compaction drops
-                    compacted[0] = {**compacted[0], "text": f"{compacted[0]['text']}\n\n"
-                                                            f"Current todo list:\n{self.todo}"}
-                self.on_event("compaction", {"before": len(messages), "after": len(compacted)})
-            # Compaction shrinks the list; the log keeps the full history.
-            self._recorded = min(self._recorded, len(compacted))
-            return compacted
+            return self._compacted(messages, self.budget_tokens)
 
         def drive():
             return loop.run_loop(self.model, self.system, self.messages, self.tools,
                                  on_event, before_tool, max_turns=self.max_turns,
-                                 before_turn=before_turn, after_tool=after_tool)
+                                 before_turn=before_turn, after_tool=after_tool,
+                                 stream=self.stream)
 
         self.on_event("session_start", {"session": self.session_path, "model": self.model})
         try:
@@ -203,6 +207,28 @@ class Harness:
         finally:
             self._flush()
             self.on_event("session_end", {"session": self.session_path})
+
+    def clear(self):
+        """Start a fresh conversation; the next run opens a new session file."""
+        self.messages, self._recorded, self.session_path, self.todo = [], 0, None, ""
+
+    def compact(self):
+        """Summarise older turns now, whatever the budget; return (before, after) counts."""
+        before = len(self.messages)
+        self.messages = self._compacted(self.messages, budget_tokens=0)
+        return before, len(self.messages)
+
+    def _compacted(self, messages, budget_tokens):
+        """Compact messages against budget, keeping the todo list and the log consistent."""
+        compacted = context.compact(self.model, messages, budget_tokens)
+        if compacted is not messages:
+            if self.todo:  # the plan must outlive the details compaction drops
+                compacted[0] = {**compacted[0], "text": f"{compacted[0]['text']}\n\n"
+                                                        f"Current todo list:\n{self.todo}"}
+            self.on_event("compaction", {"before": len(messages), "after": len(compacted)})
+        # Compaction shrinks the list; the log keeps the full history.
+        self._recorded = min(self._recorded, len(compacted))
+        return compacted
 
     def audit_label(self):
         """Name this harness's entries in the audit log: its session, or its parent's."""

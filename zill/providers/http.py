@@ -1,4 +1,4 @@
-"""Shared HTTP for adapters: one JSON POST with retries that respect the server.
+"""Shared HTTP for adapters: JSON POSTs and SSE streams with retries that respect the server.
 
 Design rules:
   * Transient failures (rate limits, overload, 5xx, network drops) retry with
@@ -6,6 +6,8 @@ Design rules:
     Retry-After header or a retryDelay in the error body.
   * A 429 for a daily quota is not transient: it raises at once, because
     every retry spends a request that will not come back until the reset.
+  * Retries happen only while opening the request. Once a stream has begun,
+    a failure raises, because replaying half a reply would duplicate it.
   * Errors carry the status and the start of the server's body, never the
     request headers, which hold the API key.
 """
@@ -25,6 +27,28 @@ RETRY_DELAY = re.compile(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"')
 
 def post_json(url, body, headers, label, retries=5, timeout=600):
     """POST body as JSON to url and return the decoded reply, retrying transient errors."""
+    with _open(url, body, headers, label, retries, timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def post_sse(url, body, headers, label, retries=5, timeout=600):
+    """POST body and yield each server-sent event's JSON data until the stream ends."""
+    with _open(url, body, headers, label, retries, timeout) as response:
+        for raw in response:
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line.startswith("data:"):
+                continue  # blank separators, "event:" names, ":" keep-alives
+            data = line[len("data:"):].strip()
+            if data == "[DONE]":
+                return
+            try:
+                yield json.loads(data)
+            except json.JSONDecodeError as err:
+                raise RuntimeError(f"{label} sent a malformed stream event: {data[:200]}") from err
+
+
+def _open(url, body, headers, label, retries, timeout):
+    """Open the POST request, retrying transient failures; return the response."""
     payload = json.dumps(body).encode("utf-8")
     headers = {"Content-Type": "application/json", **headers}
     for attempt in range(retries):
@@ -32,8 +56,7 @@ def post_json(url, body, headers, label, retries=5, timeout=600):
         last_try = attempt == retries - 1
         wait = 2 ** attempt * 2
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
+            return urllib.request.urlopen(request, timeout=timeout)
         except urllib.error.HTTPError as err:
             detail = err.read().decode("utf-8", errors="replace")
             err.close()

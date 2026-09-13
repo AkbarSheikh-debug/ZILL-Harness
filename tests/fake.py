@@ -30,13 +30,18 @@ class FakeProvider:
         self.replies = list(replies)
         self.requests = []
 
-    def complete(self, model, system, messages, tools):
-        """Record the request and return the next scripted reply."""
-        self.requests.append({"system": system, "messages": copy.deepcopy(messages),
+    def complete(self, model, system, messages, tools, on_text=None):
+        """Record the request and return the next scripted reply, streaming its text."""
+        self.requests.append({"model": model, "system": system,
+                              "messages": copy.deepcopy(messages),
                               "tools": [t["schema"]["name"] for t in tools or []]})
         if not self.replies:
             raise AssertionError("FakeProvider ran out of scripted replies")
-        return copy.deepcopy(self.replies.pop(0))  # the loop adds ids in place
+        reply = copy.deepcopy(self.replies.pop(0))  # the loop adds ids in place
+        if on_text is not None:
+            for word in reply["text"].split(" "):  # arrive in fragments, like a real stream
+                on_text(word + " ")
+        return reply
 
     def __enter__(self):
         self._patch = mock.patch.object(provider, "complete", self.complete)
