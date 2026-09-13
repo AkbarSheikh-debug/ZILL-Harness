@@ -1,7 +1,8 @@
 # Install ZILL on Windows: irm https://raw.githubusercontent.com/AkbarSheikh-debug/ZILL-Harness/main/install.ps1 | iex
 # Uses uv if present, then pipx, then pip --user; with no Python 3.10+, it installs uv, which brings its own Python.
 # Set $env:ZILL_SOURCE to install something else (e.g. zill-harness from PyPI, or a local path).
-$ErrorActionPreference = 'Stop'
+# No global ErrorActionPreference = 'Stop': Windows PowerShell 5.1 turns any stderr line from a
+# native tool (uv prints notes there) into a fatal error. Run checks exit codes instead.
 
 $source = if ($env:ZILL_SOURCE) { $env:ZILL_SOURCE } else { 'https://github.com/AkbarSheikh-debug/ZILL-Harness/archive/refs/heads/main.zip' }
 
@@ -42,7 +43,7 @@ if (Has 'uv') {
     Add-UserPath (& $py -c "import sysconfig; print(sysconfig.get_path('scripts', 'nt_user'))")
 } else {
     Say 'no Python 3.10+ found; installing uv (it brings its own Python)'
-    Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression
+    Invoke-RestMethod https://astral.sh/uv/install.ps1 -ErrorAction Stop | Invoke-Expression
     $env:Path = "$HOME\.local\bin;$env:Path"
     Run uv tool install --force --python 3.12 $source
     uv tool update-shell *> $null
