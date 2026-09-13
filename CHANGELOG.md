@@ -42,6 +42,19 @@ All notable changes to this project are documented here. The format follows
 - **Untrusted-data rules:** the system prompt treats tool output and files as data, never
   instructions, and forbids revealing secrets.
 
+- **Verify loop:** `--verify "pytest -q"` or `"verify"` in `.zill/project.json`. A failing
+  check goes back to the model for up to 3 fix rounds before the run finishes.
+- **Checkpoints:** a shadow git repository at `.zill/checkpoints` snapshots the work tree before
+  every allowed state-changing call. `zill checkpoints`, `zill undo [id]`, and interactive
+  `/undo` and `/checkpoints` restore them, and each restore can be restored.
+- **Todo tool:** a checklist the model keeps, printed in the CLI, re-injected after
+  compaction, rebuilt on `--resume`, and shown by `/todo`.
+- **Hooks:** `"hooks"` in `.zill/project.json` run commands before or after matching
+  tools. A failing before-hook blocks the call; a failing after-hook reports to the model.
+- **Command policy:** hook and verify commands pass through Policy (approval, dry-run, deny
+  patterns) and are written to the audit log.
+- **`after_tool` socket:** `run_loop` gains `after_tool(call, result)`.
+
 ### Changed
 - **Sub-agent approval:** `spawn_agent` is read-risk. The child's own calls are still gated
   by the shared policy, so safe mode no longer asks twice.

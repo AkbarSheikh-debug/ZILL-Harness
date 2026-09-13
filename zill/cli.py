@@ -26,6 +26,7 @@ import json
 import sys
 
 from . import credentials, provider
+from .checkpoints import Checkpoints
 from .harness import Harness
 from .security import MODES, Policy
 
@@ -33,6 +34,7 @@ ARGS_CLIP = 100  # characters of a tool call's JSON arguments shown
 RESULT_CLIP = 120  # characters of a result's first line shown
 DIM, RESET = "\033[2m", "\033[0m"
 PROMPT = "zill> "
+COMMANDS = ("/undo", "/checkpoints", "/todo")
 
 
 def _clip(text, limit):
@@ -60,6 +62,11 @@ def print_event(kind, payload):
     elif kind == "tool_end":
         first = credentials.redact((payload["result"].splitlines() or [""])[0])
         print(_dim(f"   {_clip(first, RESULT_CLIP)}"))
+    elif kind == "todo":
+        print(_dim(credentials.redact(payload["items"])))
+    elif kind == "verify":
+        outcome = "not run" if payload["exit"] is None else f"exit {payload['exit']}"
+        print(_dim(f"verify: {payload['command']} -> {outcome}"))
     sys.stdout.flush()
 
 
@@ -86,10 +93,44 @@ def build_parser():
                         help="tool policy (default: safe interactively, yolo with -p)")
     parser.add_argument("--dry-run", action="store_true",
                         help="plan and inspect only: every call that is not a read is blocked")
+    parser.add_argument("--verify", metavar="COMMAND",
+                        help="a run is done only when COMMAND passes, e.g. \"pytest -q\" "
+                             "(default: \"verify\" in .zill/project.json)")
     parser.add_argument("--resume", action="store_true",
                         help="continue the latest session in the working directory")
     parser.add_argument("--max-turns", type=int, default=120, help="tool turns per task")
     return parser
+
+
+def checkpoint_command(argv):
+    """`zill checkpoints` lists snapshots; `zill undo [ID]` restores one."""
+    parser = argparse.ArgumentParser(prog=f"zill {argv[0]}")
+    if argv[0] == "undo":
+        parser.add_argument("id", nargs="?",
+                            help="checkpoint to restore (default: undo the latest change)")
+    parser.add_argument("-d", "--workdir", default=".", help="project directory")
+    args = parser.parse_args(argv[1:])
+    store = Checkpoints(args.workdir)
+    if argv[0] == "checkpoints":
+        entries = store.list()
+        for ref, age, label in entries:
+            print(f"{ref}  {age:>16}  {label}")
+        if not entries:
+            print("no checkpoints yet")
+        return 0
+    return _undo(store, args.id)
+
+
+def _undo(store, ref=None):
+    """Restore a checkpoint and report it; return an exit code."""
+    try:
+        restored = store.restore(ref)
+    except RuntimeError as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 1
+    print(f"restored checkpoint {restored}. To reverse this, run `zill checkpoints` "
+          f"and restore the \"restore:\" entry.")
+    return 0
 
 
 def setup():
@@ -122,6 +163,8 @@ def main(argv=None):
         sys.stdout.reconfigure(errors="replace")
     if argv[:1] == ["setup"]:
         return setup()
+    if argv[:1] in (["checkpoints"], ["undo"]):
+        return checkpoint_command(argv)
     args = build_parser().parse_args(argv)
     model = args.model or provider.default_model()
     missing = provider.missing_key(model)
@@ -136,8 +179,12 @@ def main(argv=None):
         return 1
     mode = args.mode or ("yolo" if args.prompt else "safe")
     policy = Policy(mode, approver=ask_approval, dry_run=args.dry_run)
-    harness = Harness(args.workdir, model=model, on_event=print_event, policy=policy,
-                      max_turns=args.max_turns)
+    try:
+        harness = Harness(args.workdir, model=model, on_event=print_event, policy=policy,
+                          max_turns=args.max_turns, verify=args.verify)
+    except RuntimeError as err:  # e.g. an invalid .zill/project.json
+        print(f"error: {err}", file=sys.stderr)
+        return 1
     if args.resume and not harness.resume():
         print("no session to resume; starting fresh", file=sys.stderr)
     if args.prompt:
@@ -150,11 +197,25 @@ def main(argv=None):
     return _interactive(harness, mode)
 
 
+def _slash(harness, command):
+    """Handle an interactive command: /undo, /checkpoints or /todo."""
+    if command == "/todo":
+        print(harness.todo or "no todo list yet")
+    elif not (harness.checkpoints and harness.checkpoints.available):
+        print("checkpoints are unavailable (git is not on PATH)")
+    elif command == "/checkpoints":
+        for ref, age, label in harness.checkpoints.list() or [("", "", "no checkpoints yet")]:
+            print(f"{ref}  {age}  {label}".strip())
+    else:
+        _undo(harness.checkpoints)
+
+
 def _interactive(harness, mode):
     """Prompt loop: each line is a task; Ctrl-D exits, Ctrl-C stops the current run."""
     dry = "  dry-run" if harness.policy.dry_run else ""
     print(f"ZILL Harness  model={harness.model}  mode={mode}{dry}\n"
-          f"jail: {harness.workdir}\nCtrl-D exits, Ctrl-C interrupts a run.")
+          f"jail: {harness.workdir}\nCtrl-D exits, Ctrl-C interrupts a run. "
+          f"Commands: {' '.join(COMMANDS)}")
     if harness.messages:
         print(f"resumed {len(harness.messages)} messages from {harness.session_path}")
     while True:
@@ -167,6 +228,9 @@ def _interactive(harness, mode):
             print()
             continue
         if not task:
+            continue
+        if task in COMMANDS:
+            _slash(harness, task)
             continue
         try:
             harness.run(task)

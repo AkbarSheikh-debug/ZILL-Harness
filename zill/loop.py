@@ -26,12 +26,13 @@ from . import provider
 
 
 def run_loop(model, system, messages, tools, on_event, before_tool,
-             max_turns=80, before_turn=None):
+             max_turns=80, before_turn=None, after_tool=None):
     """Drive the model until it answers without tool calls; return that text.
 
     tools maps name -> Tool (with .spec and .run). on_event(kind, payload)
     reports progress. before_tool(call) returns None to allow a call or a
-    reason string to block it.
+    reason string to block it. after_tool(call, result) may extend the
+    result of a call that ran.
     """
     specs = [t.spec for t in tools.values()]
     for _ in range(max_turns):
@@ -51,6 +52,8 @@ def run_loop(model, system, messages, tools, on_event, before_tool,
                                           "reason": reason})
             else:
                 result = _execute(call, tools)
+                if after_tool is not None:
+                    result = after_tool(call, result)
             on_event("tool_end", {"id": call["id"], "name": call["name"], "result": result,
                                   "seconds": round(time.monotonic() - started, 3)})
             messages.append({"role": "tool", "id": call["id"], "name": call["name"],

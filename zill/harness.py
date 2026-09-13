@@ -1,9 +1,10 @@
-"""Day 4 — The harness: one object that composes the whole week.
+"""Day 4 — The harness: one object that composes every layer.
 
-Concept: days 1–3 built the parts — a provider, a loop, tools, a policy, a
-context engine, memory, skills. Harness wires them into one agent bound to
-one working directory, records every message to a session file as it lands,
-and can pick a crashed conversation back up where the file ends.
+Concept: the other modules build the parts: a provider, a loop, tools, a
+policy, a context engine, memory, skills, checkpoints, hooks. Harness wires
+them into one agent bound to one working directory, records every message
+to a session file as it lands, and can pick a crashed conversation back up
+where the file ends.
 
 Design rules:
   * Composition only. Each capability still lives in its own module; this
@@ -20,18 +21,28 @@ Design rules:
     write to the parent's audit log under the parent's session name.
   * Every tool call is decided by Policy.decide() with the Tool in hand (its
     risk and source), and recorded in the audit log when it finishes.
+  * Before an allowed state-changing call runs: before-hooks, then a
+    checkpoint. After it runs: after-hooks. Reads trigger neither.
+  * A run is done when the model stops and the verify command passes; a
+    failing check goes back to the model for up to MAX_FIX_ROUNDS rounds.
+    Hook and verify commands are decided by Policy like bash calls.
 """
 
 import os
 import time
+import uuid
 
-from . import __version__, audit, context, credentials, loop, memory, provider, session, skills
-from .security import Policy
+from . import (__version__, audit, config, context, credentials, hooks, loop, memory,
+               provider, session, skills, todo)
+from .checkpoints import TOOL_PREFIX, Checkpoints
+from .security import Decision, Policy
 from .subagent import subagent_tool
-from .tools import core_tools, tool
-
+from .tools import Tool, core_tools, tool
 
 COMPACT_AT = 0.6  # compact once the transcript fills this share of the window
+MAX_FIX_ROUNDS = 3
+VERIFY_FAILED = ("Verification failed: `{command}` exited {code}.\n{output}\n\n"
+                 "Find and fix the cause, then finish with a short summary.")
 
 
 def _ignore(kind, payload):
@@ -43,8 +54,8 @@ class Harness:
 
     def __init__(self, workdir=".", model=None, policy=None, extra_tools=None,
                  system_extra="", on_event=None, budget_tokens=None, max_turns=120,
-                 session_path=None, enable_subagents=True, persist=True, _depth=0,
-                 _audit_label=None):
+                 session_path=None, enable_subagents=True, persist=True, verify=None,
+                 hooks=None, checkpoints=True, _depth=0, _audit_label=None):
         self.workdir = os.path.realpath(workdir)
         os.makedirs(self.workdir, exist_ok=True)
         self.model = model or provider.default_model()
@@ -59,6 +70,13 @@ class Harness:
         self._recorded = 0  # messages[:_recorded] are already on disk
         self._audit_label = _audit_label
         self._pending = {}  # call id -> (call, tool, decision) awaiting tool_end
+        # None means "from .zill/project.json"; "" or [] switch the feature off.
+        project = (config.load_project(self.workdir) if verify is None or hooks is None
+                   else {})
+        self.verify = project.get("verify") if verify is None else (verify or None)
+        self.hooks = project.get("hooks", []) if hooks is None else hooks
+        self.checkpoints = Checkpoints(self.workdir) if checkpoints else None
+        self.todo = ""
 
         self.tools = {t.name: t for t in core_tools(self.workdir)}
 
@@ -67,15 +85,21 @@ class Harness:
         def remember(note):
             return memory.remember(self.workdir, note)
 
-        self.tools[remember.name] = remember
+        def update_todo(checklist):
+            self.todo = checklist
+            self.on_event("todo", {"items": checklist})
+
+        for extra in (remember, todo.todo_tool(update_todo)):
+            self.tools[extra.name] = extra
         if skills.catalog(self.workdir):
             self.tools.update({t.name: t for t in skills.skill_tools(self.workdir)})
         if enable_subagents:
             def make_child(depth):
-                """Build an ephemeral child over the same directory and policy."""
+                """Build an ephemeral child over the same directory, policy and hooks."""
                 return Harness(self.workdir, model=self.model, policy=self.policy,
                                on_event=self.on_event, budget_tokens=self.budget_tokens,
-                               max_turns=max_turns, persist=False, _depth=depth,
+                               max_turns=max_turns, persist=False, verify="",
+                               hooks=self.hooks, checkpoints=checkpoints, _depth=depth,
                                _audit_label=f"{self.audit_label()} (sub-agent)")
 
             spawn = subagent_tool(make_child, depth=_depth)
@@ -91,13 +115,14 @@ class Harness:
             return False
         self.messages = session.load(path)
         self.session_path = path
+        self.todo = todo.latest(self.messages)
         if self.persist:
             self._rewrite()
         self._recorded = len(self.messages)
         return bool(self.messages)
 
     def run(self, task):
-        """Add task to the conversation, drive the loop, and return the final text."""
+        """Add task to the conversation, drive the loop until verified, return the final text."""
         if self.persist and self.session_path is None:
             self.session_path = session.new_session(self.workdir, task[:32])
             session.write_meta(self.session_path, self.metadata())
@@ -117,23 +142,60 @@ class Harness:
             self._flush()
             tool_obj = self.tools.get(call["name"])
             decision = self.policy.decide(call, tool_obj)
+            if decision.allowed and decision.risk != "read":
+                refusal = self._before_hooks(call)
+                if refusal:
+                    decision = Decision(False, refusal, decision.risk, decision.needs_approval)
+                else:
+                    self._checkpoint(call)
             self._pending[call["id"]] = (call, tool_obj, decision)
             return None if decision.allowed else decision.reason
+
+        def after_tool(call, result):
+            _, _, decision = self._pending.get(call["id"], (None, None, None))
+            if decision is None or decision.risk == "read":
+                return result
+            return self._after_hooks(call, result)
 
         def before_turn(messages):
             self._flush()
             compacted = context.compact(self.model, messages, self.budget_tokens)
             if compacted is not messages:
+                if self.todo:  # the plan must outlive the details compaction drops
+                    compacted[0] = {**compacted[0], "text": f"{compacted[0]['text']}\n\n"
+                                                            f"Current todo list:\n{self.todo}"}
                 self.on_event("compaction", {"before": len(messages), "after": len(compacted)})
             # Compaction shrinks the list; the log keeps the full history.
             self._recorded = min(self._recorded, len(compacted))
             return compacted
 
-        self.on_event("session_start", {"session": self.session_path, "model": self.model})
-        try:
+        def drive():
             return loop.run_loop(self.model, self.system, self.messages, self.tools,
                                  on_event, before_tool, max_turns=self.max_turns,
-                                 before_turn=before_turn)
+                                 before_turn=before_turn, after_tool=after_tool)
+
+        self.on_event("session_start", {"session": self.session_path, "model": self.model})
+        try:
+            text = drive()
+            for fix_round in range(MAX_FIX_ROUNDS + 1):
+                if not self.verify:
+                    break
+                code, output = self._run_config_command("verify", self.verify)
+                self.on_event("verify", {"command": self.verify, "exit": code,
+                                         "round": fix_round})
+                if code is None:
+                    text = f"{text}\n\n(Verification not run: {output})"
+                    break
+                if code == 0:
+                    break
+                if fix_round == MAX_FIX_ROUNDS:
+                    text = (f"{text}\n\nVerification still failing after {MAX_FIX_ROUNDS} "
+                            f"fix rounds: `{self.verify}` exited {code}.")
+                    break
+                self.messages.append({"role": "user", "text": VERIFY_FAILED.format(
+                    command=self.verify, code=code, output=output or "(no output)")})
+                text = drive()
+            return text
         except Exception as err:
             self.on_event("error", {"type": type(err).__name__,
                                     "message": credentials.redact(str(err))})
@@ -158,7 +220,68 @@ class Harness:
                 "mode": self.policy.mode, "dry_run": self.policy.dry_run,
                 "tools": {name: {"source": t.source, "risk": t.risk}
                           for name, t in sorted(self.tools.items())},
-                "skills": sorted(skills.catalog(self.workdir))}
+                "skills": sorted(skills.catalog(self.workdir)),
+                "verify": self.verify, "hooks": len(self.hooks),
+                "checkpoints": bool(self.checkpoints and self.checkpoints.available)}
+
+    def _run_config_command(self, kind, command):
+        """Run a hook or verify command through Policy; return (exit, output) or (None, reason)."""
+        call = {"id": f"{kind}_{uuid.uuid4().hex[:8]}", "name": kind, "args": {"command": command}}
+        tool_obj = Tool(name=kind, spec={}, run=None, source="config", risk="execute")
+        decision = self.policy.decide(call, tool_obj)
+        if not decision.allowed:
+            audit.record(self.workdir, self.audit_label(), call, tool_obj, decision,
+                         f"BLOCKED: {decision.reason}", 0.0)
+            return None, decision.reason
+        started = time.monotonic()
+        code, output = hooks.run_command(command, self.workdir)
+        audit.record(self.workdir, self.audit_label(), call, tool_obj, decision,
+                     "ok" if code == 0 else f"ERROR: exit {code}",
+                     round(time.monotonic() - started, 3))
+        return code, output
+
+    def _before_hooks(self, call):
+        """Run matching before-hooks; return a refusal reason, or None to proceed."""
+        for hook in hooks.matching(self.hooks, "before", call):
+            command = hooks.command_for(hook, call)
+            if command is None:
+                return f"before-hook {hook['run']!r} cannot run on an unusual path; rename it"
+            code, output = self._run_config_command("hook", command)
+            if code is None:
+                return f"before-hook `{command}` was not allowed: {output}"
+            if code != 0:
+                return f"before-hook `{command}` failed (exit {code}): {output}"
+        return None
+
+    def _after_hooks(self, call, result):
+        """Run matching after-hooks; return result with any failures appended."""
+        notes = []
+        for hook in hooks.matching(self.hooks, "after", call):
+            command = hooks.command_for(hook, call)
+            if command is None:
+                notes.append(f"[after-hook {hook['run']!r} skipped: unusual path]")
+                continue
+            code, output = self._run_config_command("hook", command)
+            if code is None:
+                notes.append(f"[after-hook `{command}` not run: {output}]")
+            elif code != 0:
+                notes.append(f"[after-hook `{command}` failed (exit {code})]\n{output}")
+        return "\n".join([result, *notes])
+
+    def _checkpoint(self, call):
+        """Snapshot the work tree before a state-changing call; never block the call."""
+        if not (self.checkpoints and self.checkpoints.available):
+            return
+        args = call["args"]
+        detail = args.get("path") or str(args.get("command", ""))[:60]
+        label = f"{TOOL_PREFIX}{call['name']} {detail}".strip()
+        try:
+            ref = self.checkpoints.snapshot(label)
+        except RuntimeError as err:
+            self.on_event("checkpoint", {"id": None, "label": label,
+                                         "error": credentials.redact(str(err))})
+            return
+        self.on_event("checkpoint", {"id": ref, "label": label})
 
     def _flush(self):
         """Append every message not yet recorded to the session file."""

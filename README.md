@@ -69,12 +69,48 @@ zill --resume -d ./myproject                  # continue the latest session ther
 | `-m, --model` | `provider:model` (see Providers). |
 | `--mode` | `safe`, `yolo` or `read-only`. Default: `safe` interactively, `yolo` with `-p`. |
 | `--dry-run` | Plan and inspect only: every call that is not a read is blocked, sub-agents included. |
+| `--verify` | A run is done only when this command passes, for example `"pytest -q"`. |
 | `--resume` | Load the newest session in the workdir before running. |
 | `--max-turns` | Tool turns allowed per task (default 120). |
 
 In safe mode, every call that changes state asks
 `approve bash({"command": ...})? [y/N]`. Ctrl-C stops the current run without
 losing the session. Ctrl-D exits.
+
+### Make it prove its work
+
+Put the project's check in `.zill/project.json`, and a run isn't done until it
+passes. Failures go back to the agent, with up to 3 fix rounds:
+
+```json
+{
+  "verify": "python -m pytest -q",
+  "hooks": [
+    {"when": "after", "tool": "write_file", "match": "*.py", "run": "ruff format {path}"},
+    {"when": "before", "match": "generated/*", "run": "python -c \"raise SystemExit('do not edit generated files')\""}
+  ]
+}
+```
+
+A failing `before` hook blocks the call, and a failing `after` hook's output
+goes back to the agent. Verify and hook commands go through the same policy as
+`bash`, so safe mode asks first and `--dry-run` skips them.
+
+### Take it back
+
+Before every change, ZILL snapshots the project into a separate git repository
+at `.zill/checkpoints`. Your own `.git` is never touched. You need git installed.
+
+```sh
+zill checkpoints -d ./myproject     # list snapshots
+zill undo -d ./myproject            # undo the latest change (repeat to go further back)
+zill undo 3f2a1bc -d ./myproject    # restore a specific snapshot
+```
+
+In interactive mode, use `/undo`, `/checkpoints`, and `/todo`. `/todo` shows
+the checklist the agent keeps during long tasks.
+
+### See what happened
 
 Every tool call is written to `.zill/audit.jsonl` with its risk
 (`read`, `write`, `execute`, `network`, `destructive`), the policy decision,
@@ -92,6 +128,10 @@ the agent did and why.
 | `tools.py` | The `@tool` decorator and six core tools: read, write, edit, bash, list, grep. File paths are confined to the workdir. |
 | `security.py` | `Policy.decide()`: classifies each call by risk (bash by what the command does), denies destructive calls in every mode, and applies `read-only`, `safe`, `yolo` and dry-run. |
 | `audit.py` | `.zill/audit.jsonl`: one redacted line per tool call with risk, decision, duration and status. |
+| `config.py` | `.zill/project.json`: the project's verify command and hooks, validated with clear errors. |
+| `hooks.py` | Before and after hooks around state-changing tools, with safe `{path}` substitution. |
+| `checkpoints.py` | Shadow-git snapshots before every change, with undo one step at a time. Your own `.git` is untouched. |
+| `todo.py` | The checklist tool. It survives compaction and resume. |
 | `context.py` | Compaction. Over the token budget, older turns are summarised and the recent tail is kept verbatim. |
 | `memory.py` | `ZILL.md` project memory, loaded into the system prompt, and the `remember` tool that appends to it. |
 | `skills.py` | `skills/<name>/SKILL.md`. A one-line catalog sits in the prompt, and the full text loads on demand via `use_skill`. |
