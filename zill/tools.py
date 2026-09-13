@@ -25,6 +25,8 @@ import subprocess
 from dataclasses import dataclass
 from typing import Callable
 
+# shell=True runs COMSPEC on Windows and /bin/sh elsewhere; the prompt names it.
+SHELL = os.environ.get("COMSPEC", "cmd.exe") if os.name == "nt" else "/bin/sh"
 IGNORED_DIRS = {".git", "node_modules", "__pycache__", ".venv"}
 MAX_READ_LINES = 4000
 MAX_BASH_CHARS = 12000

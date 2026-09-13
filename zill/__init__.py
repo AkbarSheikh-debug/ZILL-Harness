@@ -1,13 +1,15 @@
-"""ZILL Harness: a small coding-agent harness built one layer a day.
+"""ZILL Harness: a concise coding-agent harness built one layer at a time.
 
-Harness composes the week; Policy gates tool calls; Tool and tool let
+Harness composes the layers; Policy gates tool calls; Tool and tool let
 callers hand the agent their own functions; run_fleet runs many harnesses
 side by side.
 """
 
-from .fleet import run_fleet
-from .harness import Harness
-from .security import Policy
-from .tools import Tool, tool
+__version__ = "0.2.0.dev0"  # defined before the imports below: harness.py reads it
 
-__all__ = ["Harness", "Policy", "Tool", "run_fleet", "tool"]
+from .fleet import run_fleet  # noqa: E402
+from .harness import Harness  # noqa: E402
+from .security import Policy  # noqa: E402
+from .tools import Tool, tool  # noqa: E402
+
+__all__ = ["Harness", "Policy", "Tool", "__version__", "run_fleet", "tool"]

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zill-harness"
-version = "0.1.0"
+dynamic = ["version"]
 description = "ZILL: a concise coding-agent harness built with less code. Zero dependencies."
 readme = "README.md"
 license = "MIT"
@@ -32,3 +32,6 @@ Changelog = "https://github.com/AkbarSheikh-debug/ZILL-Harness/blob/main/CHANGEL
 
 [tool.setuptools]
 packages = ["zill"]
+
+[tool.setuptools.dynamic]
+version = { attr = "zill.__version__" }

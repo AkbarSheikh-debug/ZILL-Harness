@@ -16,8 +16,10 @@ Design rules:
 import os
 import platform
 
+from .tools import SHELL
+
 MEMORY_FILE = "ZILL.md"
-SHELL = "cmd.exe" if platform.system() == "Windows" else "/bin/sh"
+WINDOWS_HINT = "; use Windows commands (dir, type, copy, where), not POSIX ones"
 BASE_PROMPT = """You are ZILL, a small, sharp coding agent. You work inside one \
 directory using only the tools provided.
 - Act, don't narrate: call tools rather than describing what you would do.
@@ -33,7 +35,8 @@ def build_system_prompt(workdir, extra=""):
     root = os.path.realpath(workdir)
     sections = [
         BASE_PROMPT,
-        f"Platform: {platform.system()} (bash tool runs through {SHELL}). "
+        f"Platform: {platform.system()} (the bash tool runs through {SHELL}"
+        f"{WINDOWS_HINT if os.name == 'nt' else ''}). "
         f"Working directory: {root}",
     ]
     path = os.path.join(root, MEMORY_FILE)

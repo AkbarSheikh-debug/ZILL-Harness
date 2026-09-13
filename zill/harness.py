@@ -19,11 +19,15 @@ Design rules:
 """
 
 import os
+import time
 
-from . import context, loop, memory, provider, session, skills
+from . import __version__, context, loop, memory, provider, session, skills
 from .security import Policy
 from .subagent import subagent_tool
 from .tools import core_tools, tool
+
+
+COMPACT_AT = 0.6  # compact once the transcript fills this share of the window
 
 
 def _ignore(kind, payload):
@@ -34,14 +38,15 @@ class Harness:
     """A persistent, policy-gated agent working inside one directory."""
 
     def __init__(self, workdir=".", model=None, policy=None, extra_tools=None,
-                 system_extra="", on_event=None, budget_tokens=600_000, max_turns=120,
+                 system_extra="", on_event=None, budget_tokens=None, max_turns=120,
                  session_path=None, enable_subagents=True, persist=True, _depth=0):
         self.workdir = os.path.realpath(workdir)
         os.makedirs(self.workdir, exist_ok=True)
         self.model = (model or os.environ.get("ZILL_MODEL") or provider.DEFAULT_MODEL)
         self.policy = policy or Policy("yolo")
         self.on_event = on_event or _ignore
-        self.budget_tokens = budget_tokens
+        window = provider.model_info(self.model).get("context_window", 1_000_000)
+        self.budget_tokens = budget_tokens or int(window * COMPACT_AT)
         self.max_turns = max_turns
         self.session_path = session_path
         self.persist = persist
@@ -62,7 +67,7 @@ class Harness:
             def make_child(depth):
                 """Build an ephemeral child over the same directory and policy."""
                 return Harness(self.workdir, model=self.model, policy=self.policy,
-                               on_event=self.on_event, budget_tokens=budget_tokens,
+                               on_event=self.on_event, budget_tokens=self.budget_tokens,
                                max_turns=max_turns, persist=False, _depth=depth)
 
             spawn = subagent_tool(make_child, depth=_depth)
@@ -87,6 +92,7 @@ class Harness:
         """Add task to the conversation, drive the loop, and return the final text."""
         if self.persist and self.session_path is None:
             self.session_path = session.new_session(self.workdir, task[:32])
+            session.write_meta(self.session_path, self.metadata())
         self.messages.append({"role": "user", "text": task})
         self._flush()
 
@@ -111,6 +117,14 @@ class Harness:
                                  before_turn=before_turn)
         finally:
             self._flush()
+
+    def metadata(self):
+        """Describe this harness for the session record; never includes secrets."""
+        return {"started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "zill_version": __version__, "model": self.model,
+                "model_info": provider.model_info(self.model), "workdir": self.workdir,
+                "mode": self.policy.mode, "tools": sorted(self.tools),
+                "skills": sorted(skills.catalog(self.workdir))}
 
     def _flush(self):
         """Append every message not yet recorded to the session file."""
