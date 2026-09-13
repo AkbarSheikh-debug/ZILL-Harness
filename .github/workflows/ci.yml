@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: pip install .
+      - name: Compile
+        run: python -m compileall -q zill
+      - name: CLI smoke test
+        run: |
+          zill --help
+          python -c "import zill; print(zill.__all__)"
+
+  compact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Enforce zero dependencies and the core line budget
+        run: |
+          python - <<'EOF'
+          import pathlib, sys, tomllib
+          deps = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["dependencies"]
+          lines = sum(len(p.read_text(encoding="utf-8").splitlines())
+                      for p in pathlib.Path("zill").glob("*.py"))
+          print(f"runtime dependencies: {deps or 'none'}")
+          print(f"core lines: {lines} / 3500")
+          if deps:
+              sys.exit("ZILL must have zero runtime dependencies")
+          if lines > 3500:
+              sys.exit("core is over the 3500-line budget; make it smaller")
+          EOF

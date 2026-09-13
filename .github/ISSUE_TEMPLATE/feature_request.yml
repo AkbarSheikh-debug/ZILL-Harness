@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose a new capability for ZILL.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that ZILL makes hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How should it work? Which module would it live in?
+    validations:
+      required: true
+  - type: textarea
+    id: size
+    attributes:
+      label: Size estimate
+      description: Roughly how many lines does it add? Does it need any dependency? (The core must stay dependency-free and under 3,500 lines.)
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I'm willing to open a pull request for this.
