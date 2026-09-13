@@ -6,10 +6,16 @@ import os
 import stat
 import tempfile
 import unittest
+import urllib.error
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
-from zill import cli, credentials, provider
+from zill import cli, credentials, provider, settings
+
+
+def unauthorized():
+    body = b'{"error": {"code": 401, "message": "Request had invalid authentication"}}'
+    return urllib.error.HTTPError("https://x", 401, "no", {}, io.BytesIO(body))
 
 
 class CredentialTests(unittest.TestCase):
@@ -48,6 +54,7 @@ class CredentialTests(unittest.TestCase):
         clean = {name: "" for name in names + ["ZILL_MODEL", "ZILL_API_KEY"]}
         with mock.patch.dict(os.environ, clean), \
                 mock.patch("getpass.getpass", side_effect=pasted), \
+                mock.patch("zill.provider.check_key", return_value=None), \
                 mock.patch("builtins.input", return_value=""), \
                 redirect_stdout(io.StringIO()) as out:
             self.assertEqual(cli.main(["setup"]), 0)
@@ -55,6 +62,65 @@ class CredentialTests(unittest.TestCase):
             self.assertEqual(json.load(f), {"ANTHROPIC_API_KEY": "sk-ant-pasted-123456"})
         self.assertIn("anthropic:claude-opus-5", out.getvalue())
         self.assertNotIn("sk-ant-pasted-123456", out.getvalue())
+
+    def _setup(self, pasted, typed, rejected=()):
+        """Run setup with pasted keys (in provider order) and typed model answers."""
+        names = [key_var for _, _, key_var, _ in provider.PROVIDERS.values() if key_var]
+        clean = {name: "" for name in names + ["ZILL_MODEL", "ZILL_API_KEY"]}
+        with mock.patch.dict(os.environ, clean), \
+                mock.patch("getpass.getpass", side_effect=pasted + [""] * len(names)), \
+                mock.patch("zill.provider.check_key",
+                           side_effect=lambda name, key: "rejected" if key in rejected else None), \
+                mock.patch("builtins.input", side_effect=typed), \
+                redirect_stdout(io.StringIO()) as out:
+            code = cli.main(["setup"])
+        return code, out.getvalue()
+
+    def test_setup_rejects_a_bad_model_name_and_asks_again(self):
+        code, out = self._setup(["AIza-good-key-123456"], ["y", "gemini:gemini-3.6-flash"])
+        self.assertEqual(code, 0)
+        self.assertIn("unknown model 'y'", out)
+        self.assertEqual(credentials.get("GEMINI_API_KEY"), "AIza-good-key-123456")
+        self.assertIn("Ready", out)
+
+    def test_setup_replaces_an_invalid_saved_model_on_enter(self):
+        credentials.save("ZILL_MODEL", "y")
+        code, _ = self._setup(["AIza-good-key-123456"], [""])
+        self.assertEqual(code, 0)
+        self.assertEqual(credentials.get("ZILL_MODEL"), provider.DEFAULT_MODEL)
+
+    def test_setup_does_not_save_a_rejected_key(self):
+        code, out = self._setup(["AQ.bad-key-123456"], [""], rejected={"AQ.bad-key-123456"})
+        self.assertEqual(code, 1)
+        self.assertIn("not saved", out)
+        self.assertIn("still needs GEMINI_API_KEY", out)
+        self.assertFalse(credentials.get("GEMINI_API_KEY"))
+
+    def test_key_check_reports_a_rejected_key_and_where_to_get_one(self):
+        with mock.patch("urllib.request.urlopen", side_effect=[unauthorized()]):
+            reason = provider.check_key("gemini", "not-a-valid-key")
+        self.assertIn("gemini rejected this key", reason)
+        self.assertIn("aistudio.google.com", reason)
+        with mock.patch("urllib.request.urlopen", side_effect=[urllib.error.URLError("offline")]):
+            with self.assertRaisesRegex(RuntimeError, "unreachable"):
+                provider.check_key("gemini", "any-key")
+
+    def test_api_errors_show_the_server_message_and_a_setup_hint(self):
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "AIza-x"}), \
+                mock.patch("urllib.request.urlopen", side_effect=[unauthorized()]):
+            with self.assertRaisesRegex(RuntimeError, r"401 \(the API key was rejected: run "
+                                                      r"`zill setup`\): Request had invalid"):
+                provider.complete("gemini:gemini-3.6-flash", "sys",
+                                  [{"role": "user", "text": "hi"}], [])
+
+    def test_model_names_are_checked(self):
+        for good in ("gemini:gemini-3.6-flash", "anthropic:claude-opus-5", "ollama:qwen3:8b",
+                     "claude-opus-5", "gpt-5", "gemini-3.6-flash"):
+            self.assertIsNone(provider.check_model(good), good)
+        for bad in ("y", "yes", "openrouter:", "llama3", "foo:bar"):
+            self.assertIsNotNone(provider.check_model(bad), bad)
+        with self.assertRaisesRegex(RuntimeError, "unknown model 'y'"):
+            settings.make_harness(settings.resolve(self._home.name, model="y"), persist=False)
 
     def test_headless_run_without_a_key_explains_how_to_fix_it(self):
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "", "ZILL_API_KEY": ""}), \

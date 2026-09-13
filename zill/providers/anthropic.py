@@ -30,6 +30,11 @@ CACHE = {"type": "ephemeral"}
 REFUSED = "(The model declined this request.)"
 
 
+def auth_headers(key):
+    """Return the headers that authenticate key."""
+    return {"x-api-key": key, "anthropic-version": VERSION}
+
+
 def model_info(model):
     """Return what model supports: tools, parallel calls, window and output sizes."""
     return {"supports_tools": True, "supports_parallel_tools": True,
@@ -107,7 +112,7 @@ def complete(model, system, messages, tools, base, key, on_text=None):
         body["tools"] = [{"name": s["name"], "description": s["description"],
                           "input_schema": s["parameters"]}
                          for s in (t["schema"] for t in tools)]
-    headers = {"x-api-key": key, "anthropic-version": VERSION}
+    headers = auth_headers(key)
     if on_text is None:
         data = post_json(f"{base}/messages", body, headers, "Anthropic")
     else:

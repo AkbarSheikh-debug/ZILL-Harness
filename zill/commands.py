@@ -55,19 +55,46 @@ def setup(argv=()):
     try:
         for name, (_, _, key_var, _) in provider.PROVIDERS.items():
             if key_var:
-                status = " [already set]" if credentials.get(key_var) else ""
-                value = getpass.getpass(f"  {name} {key_var}{status}: ").strip()
-                if value:
-                    credentials.save(key_var, value)
-        suggested = provider.default_model()
-        model = input(f"Default model [{suggested}]: ").strip()
+                _ask_key(name, key_var)
+        saved = provider.default_model()
+        suggested = provider.default_model(saved=False) if provider.check_model(saved) else saved
+        print(f"Models are written provider:model, e.g. {provider.DEFAULT_MODEL}.")
+        while True:
+            model = input(f"Default model [{suggested}]: ").strip() or suggested
+            problem = provider.check_model(model)
+            if not problem:
+                break
+            print(f"  {problem}")
     except (EOFError, KeyboardInterrupt):
         print("\nsetup stopped; keys entered so far are saved")
         return 1
-    if model:
+    if model != saved:
         credentials.save("ZILL_MODEL", model)
-    print(f"Ready. Model: {model or suggested}. Run `zill` to start.")
+    missing = provider.missing_key(model)
+    if missing:
+        print(f"{model} still needs {missing}. Run `zill setup` again to add it.")
+        return 1
+    print(f"Ready. Model: {model}.")
     return 0
+
+
+def _ask_key(name, key_var):
+    """Ask for one provider's key until it is skipped, accepted, or cannot be checked."""
+    status = " [already set]" if credentials.get(key_var) else ""
+    while True:
+        value = getpass.getpass(f"  {name} {key_var}{status}: ").strip()
+        if not value:
+            return
+        try:
+            problem = provider.check_key(name, value)
+            note = "ok"
+        except RuntimeError as err:
+            problem, note = None, f"saved, but it could not be checked now: {err}"
+        if not problem:
+            credentials.save(key_var, value)
+            print(f"    {note}")
+            return
+        print(f"    {problem}\n    not saved: paste another key, or press Enter to skip")
 
 
 def doctor(argv):
@@ -108,8 +135,10 @@ def doctor(argv):
                               f"profile {resolved['profile']}")
         for note in resolved["notes"]:
             check("warn", "config", note)
-        missing = provider.missing_key(resolved["model"])
-        check("fail" if missing else "ok", "model",
+        problem = provider.check_model(resolved["model"])
+        missing = not problem and provider.missing_key(resolved["model"])
+        check("fail" if problem or missing else "ok", "model",
+              f"{problem}: run `zill setup`" if problem else
               f"{resolved['model']} needs {missing}: run `zill setup`" if missing
               else f"{resolved['model']} has what it needs")
         project = resolved["project"]

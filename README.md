@@ -20,7 +20,20 @@ comes from, passes through one policy, one dry-run switch and one audit log.
 
 ## Install
 
-It needs Python 3.10 or newer:
+One line. The installer uses uv, pipx or pip, and if there is no Python it
+fetches uv, which brings its own Python.
+
+```sh
+# macOS, Linux, WSL
+curl -fsSL https://raw.githubusercontent.com/AkbarSheikh-debug/ZILL-Harness/main/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/AkbarSheikh-debug/ZILL-Harness/main/install.ps1 | iex
+```
+
+Or with Python 3.10 or newer:
 
 ```sh
 pip install git+https://github.com/AkbarSheikh-debug/ZILL-Harness.git
