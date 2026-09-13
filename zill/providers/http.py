@@ -23,6 +23,8 @@ MAX_WAIT = 60
 DETAIL_CHARS = 400
 DAILY_QUOTA = re.compile(r"PerDay", re.IGNORECASE)
 RETRY_DELAY = re.compile(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"')
+SSL_FIX = ("re-run the ZILL installer, which uses uv's own Python, or install ZILL on a Python "
+           "where `import ssl` works (an Anaconda base Python used outside conda often fails)")
 
 
 class APIError(RuntimeError):
@@ -84,6 +86,9 @@ def _open(url, body, headers, label, retries, timeout):
                                err.code) from err
             wait = max(wait, _server_wait(err.headers or {}, detail))
         except (urllib.error.URLError, TimeoutError) as err:
+            if "unknown url type: https" in str(err):  # urllib without ssl: retrying cannot help
+                raise RuntimeError(f"{label} API unreachable: this Python has no ssl module; "
+                                   f"{SSL_FIX}") from err
             if last_try:
                 raise RuntimeError(f"{label} API unreachable: {err}") from err
         time.sleep(min(wait, MAX_WAIT))

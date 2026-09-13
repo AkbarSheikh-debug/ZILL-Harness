@@ -28,6 +28,7 @@ from . import __version__, credentials, provider, session, settings, skills
 from .checkpoints import Checkpoints
 from .fleet import run_fleet
 from .profiles import PROFILES
+from .providers.http import SSL_FIX
 from .security import MODES
 
 
@@ -111,6 +112,12 @@ def doctor(argv):
     check("ok" if sys.version_info >= (3, 10) else "fail", "python",
           f"{platform.python_version()} (3.10 or newer needed)")
     check("ok", "zill", __version__)
+    try:
+        import ssl
+        check("ok", "https", ssl.OPENSSL_VERSION)
+    except ImportError as err:
+        check("fail", "https", f"this Python cannot load ssl ({err}), so no model can be "
+                               f"reached: {SSL_FIX}")
     if not os.path.isdir(workdir):
         check("fail", "workdir", f"{workdir} does not exist")
     else:

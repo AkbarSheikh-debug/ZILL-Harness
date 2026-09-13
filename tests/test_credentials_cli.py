@@ -113,6 +113,16 @@ class CredentialTests(unittest.TestCase):
                 provider.complete("gemini:gemini-3.6-flash", "sys",
                                   [{"role": "user", "text": "hi"}], [])
 
+    def test_python_without_ssl_is_explained_not_retried(self):
+        broken = urllib.error.URLError("unknown url type: https")
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "AIza-x"}), \
+                mock.patch("urllib.request.urlopen", side_effect=[broken]), \
+                mock.patch("time.sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "no ssl module.*installer"):
+                provider.complete("gemini:gemini-3.6-flash", "sys",
+                                  [{"role": "user", "text": "hi"}], [])
+        sleep.assert_not_called()
+
     def test_model_names_are_checked(self):
         for good in ("gemini:gemini-3.6-flash", "anthropic:claude-opus-5", "ollama:qwen3:8b",
                      "claude-opus-5", "gpt-5", "gemini-3.6-flash"):
