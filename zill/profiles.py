@@ -8,8 +8,9 @@ strictest mode) and adds no behaviour of its own to the loop.
 Design rules:
   * A profile can only narrow: fewer tools, a stricter mode. It never grants
     anything a plain run would not have.
-  * "tools" lists the tools kept (None keeps all); tools passed in code
-    through extra_tools are always kept.
+  * "tools" lists the built-in tools kept (None keeps all). MCP and plugin
+    tools the user approved, and tools passed in code, are always kept;
+    Policy and the profile's mode still gate them.
 """
 
 READS = ["read_file", "list_files", "grep", "todo", "use_skill", "spawn_agent"]
@@ -26,10 +27,11 @@ PROFILES = {
         "prompt": ("Profile: research. Investigate and explain. Read broadly before "
                    "concluding, cite the file and line behind every claim, and say plainly "
                    "what you could not confirm."),
-        "tools": READS + ["remember"], "mode": "read-only"},
+        "tools": READS + ["remember", "web_fetch", "web_search"], "mode": "read-only"},
     "writing": {
         "prompt": ("Profile: writing. You write and edit prose documents such as READMEs, "
                    "guides and notes. Match the audience and the existing voice, keep "
                    "structure clear, and do not change source code."),
-        "tools": READS + ["write_file", "edit_file", "remember"], "mode": None},
+        "tools": READS + ["write_file", "edit_file", "remember", "web_fetch", "web_search"],
+        "mode": None},
 }

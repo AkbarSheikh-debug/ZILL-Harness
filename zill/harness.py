@@ -33,7 +33,7 @@ import time
 import uuid
 
 from . import (__version__, audit, config, context, credentials, hooks, loop, memory,
-               provider, session, skills, todo)
+               provider, session, skills, todo, web)
 from .checkpoints import TOOL_PREFIX, Checkpoints
 from .security import Decision, Policy
 from .subagent import subagent_tool
@@ -56,7 +56,7 @@ class Harness:
                  system_extra="", on_event=None, budget_tokens=None, max_turns=120,
                  session_path=None, enable_subagents=True, persist=True, verify=None,
                  hooks=None, checkpoints=True, allowed_tools=None, stream=False,
-                 _depth=0, _audit_label=None):
+                 extensions=True, _depth=0, _audit_label=None):
         self.workdir = os.path.realpath(workdir)
         os.makedirs(self.workdir, exist_ok=True)
         self.model = model or provider.default_model()
@@ -81,7 +81,8 @@ class Harness:
         self.stream = stream
         self.usage = {"calls": 0, "input": 0, "output": 0}  # model calls this harness made
 
-        self.tools = {t.name: t for t in core_tools(self.workdir)}
+        self.tools = {t.name: t for t in core_tools(self.workdir) + web.web_tools()}
+        self.notes, self._mcp_clients = [], []  # extension problems, and servers to close
 
         @tool("Save a durable fact about this project to memory for future sessions.",
               risk="write", note="One self-contained fact worth keeping")
@@ -96,20 +97,27 @@ class Harness:
             self.tools[extra.name] = extra
         if skills.catalog(self.workdir):
             self.tools.update({t.name: t for t in skills.skill_tools(self.workdir)})
+        # MCP servers and plugins load once, at the top; children reuse the same tools.
+        loaded = self._load_extensions() if extensions is True else list(extensions or [])
         if enable_subagents:
             def make_child(depth):
-                """Build an ephemeral child over the same directory, policy and hooks."""
+                """Build an ephemeral child over the same directory, policy, hooks and tools."""
                 return Harness(self.workdir, model=self.model, policy=self.policy,
                                on_event=self.on_event, budget_tokens=self.budget_tokens,
                                max_turns=max_turns, persist=False, verify="",
                                hooks=self.hooks, checkpoints=checkpoints,
-                               allowed_tools=allowed_tools, _depth=depth,
+                               allowed_tools=allowed_tools, extensions=loaded, _depth=depth,
                                _audit_label=f"{self.audit_label()} (sub-agent)")
 
             spawn = subagent_tool(make_child, depth=_depth)
             self.tools[spawn.name] = spawn
         if allowed_tools is not None:  # a profile narrows the built-in tools
             self.tools = {n: t for n, t in self.tools.items() if n in allowed_tools}
+        for extension in loaded:  # namespaced names, but never let one replace a builtin
+            if extension.name in self.tools:
+                self.notes.append(f"tool name collision: {extension.name} was not loaded")
+            else:
+                self.tools[extension.name] = extension
         self.tools.update({t.name: t for t in extra_tools or []})
         extra = "\n\n".join(part for part in (skills.catalog_prompt(self.workdir), system_extra)
                             if part)
@@ -207,6 +215,19 @@ class Harness:
         finally:
             self._flush()
             self.on_event("session_end", {"session": self.session_path})
+
+    def _load_extensions(self):
+        """Start trusted MCP servers and load enabled plugins; return their tools."""
+        from . import mcp, plugins  # edge packages load only when a harness needs them
+        mcp_tools, self._mcp_clients, mcp_notes = mcp.load_tools(self.workdir)
+        plugin_tools, plugin_notes = plugins.load_tools(self.workdir)
+        self.notes += mcp_notes + plugin_notes
+        return mcp_tools + plugin_tools
+
+    def close(self):
+        """Stop the MCP servers this harness started."""
+        for client in self._mcp_clients:
+            client.close()
 
     def clear(self):
         """Start a fresh conversation; the next run opens a new session file."""

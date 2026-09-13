@@ -115,6 +115,20 @@ def doctor(argv):
         project = resolved["project"]
         check("ok", "project", f"verify: {project['verify'] or 'none'}; "
                                f"hooks: {len(project['hooks'])}")
+        from . import mcp, plugins  # checks read config only; nothing is started or imported
+        try:
+            servers = mcp.config.load(workdir)
+            waiting = [n for n, s in servers.items() if not mcp.config.is_trusted(workdir, n, s)]
+            check("warn" if waiting else "ok", "mcp",
+                  f"{len(servers)} servers" + (f"; not approved: {', '.join(waiting)} "
+                                               f"(zill mcp trust NAME)" if waiting else ""))
+        except RuntimeError as err:
+            check("fail", "mcp", str(err))
+        for folder, manifest, error in plugins.discover(workdir):
+            if error:
+                check("warn", "plugin", error)
+            elif plugins.state(folder) == "changed":
+                check("warn", "plugin", f"{manifest['name']} changed since it was enabled")
     path = credentials.path()
     if os.name == "posix" and os.path.exists(path) and os.stat(path).st_mode & 0o077:
         check("warn", "credentials", f"{path} is readable by others: chmod 600 {path}")
@@ -136,11 +150,12 @@ def inspect(argv):
         return 1
     try:
         resolved = settings.resolve(args.workdir, args.model, args.mode, args.profile)
-        harness = settings.make_harness(resolved, persist=False)
+        harness = settings.make_harness(resolved, persist=False)  # starts approved MCP servers
         missing = provider.missing_key(harness.model)
     except RuntimeError as err:
         print(f"error: {err}", file=sys.stderr)
         return 1
+    harness.close()
     key_var = provider.resolve(harness.model)[3]
     info = {
         "model": harness.model, "provider": provider.resolve(harness.model)[0],
@@ -152,7 +167,8 @@ def inspect(argv):
         "tools": [{"name": n, "source": t.source, "risk": t.risk}
                   for n, t in sorted(harness.tools.items())],
         "skills": sorted(skills.catalog(harness.workdir)),
-        "latest_session": session.latest(harness.workdir), "notes": resolved["notes"],
+        "latest_session": session.latest(harness.workdir),
+        "notes": resolved["notes"] + harness.notes,
     }
     lines = [f"{field:<15}{info[field]}" for field in
              ("model", "provider", "key", "workdir", "mode", "profile", "verify", "hooks",
@@ -249,7 +265,17 @@ def fleet(argv):
                                     args.profile, headless=True)
         return settings.make_harness(resolved)
 
-    results = run_fleet(jobs, make_harness, max_workers=args.workers)
+    harnesses = []
+
+    def make_tracked(workdir):
+        harnesses.append(make_harness(workdir))
+        return harnesses[-1]
+
+    try:
+        results = run_fleet(jobs, make_tracked, max_workers=args.workers)
+    finally:
+        for harness in harnesses:
+            harness.close()
     for result in results:
         result["report"] = credentials.redact(result["report"])
     _emit(results, args.json,
@@ -258,5 +284,18 @@ def fleet(argv):
     return 0 if all(r["ok"] for r in results) else 1
 
 
+def mcp(argv):
+    """`zill mcp ...`: manage and serve MCP servers."""
+    from .mcp import cli as mcp_cli
+    return mcp_cli.main(argv)
+
+
+def plugin(argv):
+    """`zill plugin ...`: manage plugins and connectors."""
+    from .plugins import cli as plugin_cli
+    return plugin_cli.main(argv)
+
+
 COMMANDS = {"setup": setup, "doctor": doctor, "inspect": inspect, "sessions": sessions,
-            "checkpoints": checkpoints, "undo": undo, "fleet": fleet}
+            "checkpoints": checkpoints, "undo": undo, "fleet": fleet, "mcp": mcp,
+            "plugin": plugin}
