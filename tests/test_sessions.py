@@ -80,7 +80,8 @@ class SessionTests(unittest.TestCase):
         self.assertIn("read_file", meta["tools"])
         self.assertEqual(meta["session"], os.path.basename(harness.session_path)[:-len(".jsonl")])
         self.assertNotIn("secret-value-123", raw)
-        self.assertEqual(session.latest(self.workdir), harness.session_path)
+        # harness.workdir is realpath'd (macOS /private, Windows 8.3 names).
+        self.assertEqual(session.latest(harness.workdir), harness.session_path)
 
 
 if __name__ == "__main__":

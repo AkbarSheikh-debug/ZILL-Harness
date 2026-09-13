@@ -28,7 +28,8 @@ class SubagentTests(unittest.TestCase):
             result = [m for m in parent.messages if m["role"] == "tool"][0]
             self.assertEqual(result["text"], "child done")
             self.assertTrue(os.path.exists(os.path.join(workdir, "b.txt")))
-            sessions = glob.glob(os.path.join(workdir, session.SESSION_DIR, "*.jsonl"))
+            # parent.workdir is realpath'd (macOS /private, Windows 8.3 names).
+            sessions = glob.glob(os.path.join(parent.workdir, session.SESSION_DIR, "*.jsonl"))
             self.assertEqual(sessions, [parent.session_path])
 
 
