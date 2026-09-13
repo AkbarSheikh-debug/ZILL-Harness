@@ -22,6 +22,11 @@ MODEL_INFO = {"supports_tools": True, "supports_parallel_tools": True,
               "max_output_tokens": 16_000}  # conservative: servers vary widely
 
 
+def auth_headers(key):
+    """Return the headers that authenticate key (none for a keyless local server)."""
+    return {"Authorization": f"Bearer {key}"} if key else {}
+
+
 def model_info(model):
     """Return what model supports: tools, parallel calls, window and output sizes."""
     return dict(MODEL_INFO)
@@ -88,7 +93,7 @@ def complete(model, system, messages, tools, base, key, on_text=None):
             "messages": [{"role": "system", "content": system}] + _to_wire(messages)}
     if tools:
         body["tools"] = [{"type": "function", "function": t["schema"]} for t in tools]
-    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    headers = auth_headers(key)
     url = f"{base}/chat/completions"
     if on_text is None:
         data = post_json(url, body, headers, "OpenAI-compatible")

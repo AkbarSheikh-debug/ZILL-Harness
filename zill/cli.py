@@ -156,11 +156,17 @@ def main(argv=None):
     try:
         resolved = settings.resolve(args.workdir, args.model, args.mode, args.profile,
                                     headless=bool(task))
-        if provider.missing_key(resolved["model"]) and not task and sys.stdin.isatty():
-            print(f"No API key found for {resolved['model']}. Let's add one.")
-            commands.setup()
+        model = resolved["model"]
+        problem = provider.check_model(model) or (
+            provider.missing_key(model) and f"No API key found for {model}")
+        if problem and not task and sys.stdin.isatty():
+            print(f"{problem}. Let's fix that.")
+            if commands.setup():
+                return 1
             resolved = settings.resolve(args.workdir, args.model, args.mode, args.profile)
-        missing = provider.missing_key(resolved["model"])
+        # A bad model name is reported by make_harness, not as a missing key.
+        model = resolved["model"]
+        missing = not provider.check_model(model) and provider.missing_key(model)
         if missing:
             raise RuntimeError(f"no API key for {resolved['model']}. "
                                f"Run `zill setup`, or set {missing}.")
@@ -229,9 +235,10 @@ def _slash(harness, line):
     elif command == "/cost":
         print(cost.describe(harness.model, harness.usage, _prices()))
     elif command == "/model":
-        missing = provider.missing_key(arg) if arg else None
-        if missing:
-            print(f"{arg} needs {missing}: run `zill setup` first")
+        problem = arg and provider.check_model(arg)
+        missing = arg and not problem and provider.missing_key(arg)
+        if problem or missing:
+            print(problem or f"{arg} needs {missing}: run `zill setup` first")
         elif arg:
             harness.model = arg
             harness.budget_tokens = int(provider.model_info(arg).get("context_window",
@@ -266,7 +273,9 @@ def _slash(harness, line):
         else:
             commands.checkpoints(["-d", harness.workdir])
     else:
-        print(f"unknown command {command}; try /help")
+        sub = command[1:]
+        print(f"`{sub}` is a terminal command: /exit, then run `zill {sub}`"
+              if sub in commands.COMMANDS else f"unknown command {command}; try /help")
     return True
 
 

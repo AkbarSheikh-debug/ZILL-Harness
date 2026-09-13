@@ -25,12 +25,14 @@ The provider contract (what every adapter honours):
     adapter-private data (Gemini's signature, Claude's raw blocks); callers
     store them and hand them back untouched.
   model_info(model) -> capability dict; callers tolerate missing keys.
+  auth_headers(key) -> the HTTP headers that authenticate key.
 """
 
 import re
 
 from . import credentials
 from .providers import anthropic, gemini, openai_compat
+from .providers.http import APIError, get_json
 
 # name: (adapter, base URL, key variable or None, default model or None)
 PROVIDERS = {
@@ -45,6 +47,15 @@ PROVIDERS = {
     "lmstudio": (openai_compat, "http://localhost:1234/v1", None, None),
 }
 DEFAULT_MODEL = "gemini:gemini-3.6-flash"
+KEY_CHECK_PATHS = {"openrouter": "/auth/key"}  # its /models answers without a key
+KEY_PAGES = {
+    "gemini": "https://aistudio.google.com/apikey",
+    "anthropic": "https://console.anthropic.com/settings/keys",
+    "openai": "https://platform.openai.com/api-keys",
+    "openrouter": "https://openrouter.ai/settings/keys",
+    "groq": "https://console.groq.com/keys",
+    "deepseek": "https://platform.deepseek.com/api_keys",
+}
 OPENAI_NAME = re.compile(r"(gpt-|chatgpt-|o\d)")
 
 
@@ -59,9 +70,38 @@ def resolve(model):
     return name, adapter, credentials.get("ZILL_BASE_URL") or base, key_var, model_id
 
 
-def default_model():
-    """ZILL_MODEL if set, else the default model of the first provider with a key."""
-    chosen = credentials.get("ZILL_MODEL")
+def check_model(model):
+    """Return why model is not a usable model name, or None."""
+    name, sep, model_id = model.partition(":")
+    if sep and name in PROVIDERS:
+        example = PROVIDERS[name][3] or "MODEL"
+        return None if model_id else f"{model!r} names no model, e.g. {name}:{example}"
+    if not sep and (model.startswith(("claude", "gemini")) or OPENAI_NAME.match(model)):
+        return None
+    return (f"unknown model {model!r}: use provider:model, e.g. {DEFAULT_MODEL} "
+            f"(providers: {', '.join(PROVIDERS)})")
+
+
+def check_key(name, key):
+    """Ask provider name whether key is valid, without spending tokens.
+
+    Returns None when the key is accepted and a short reason when it is
+    rejected; raises RuntimeError when the answer is unknown (offline, outage).
+    """
+    adapter, base, _, _ = PROVIDERS[name]
+    try:
+        get_json(base + KEY_CHECK_PATHS.get(name, "/models"), adapter.auth_headers(key), name)
+    except APIError as err:
+        if err.code not in (400, 401, 403):
+            raise
+        reason = f"{name} rejected this key"
+        return f"{reason}. Get one at {KEY_PAGES[name]}" if name in KEY_PAGES else reason
+    return None
+
+
+def default_model(saved=True):
+    """ZILL_MODEL if set (and saved), else the default model of the first provider with a key."""
+    chosen = saved and credentials.get("ZILL_MODEL")
     if chosen:
         return chosen
     for name, (_, _, key_var, default) in PROVIDERS.items():

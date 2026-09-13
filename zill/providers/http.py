@@ -8,8 +8,8 @@ Design rules:
     every retry spends a request that will not come back until the reset.
   * Retries happen only while opening the request. Once a stream has begun,
     a failure raises, because replaying half a reply would duplicate it.
-  * Errors carry the status and the start of the server's body, never the
-    request headers, which hold the API key.
+  * Errors carry the status and the server's own message (or the start of
+    its body), never the request headers, which hold the API key.
 """
 
 import json
@@ -23,6 +23,20 @@ MAX_WAIT = 60
 DETAIL_CHARS = 400
 DAILY_QUOTA = re.compile(r"PerDay", re.IGNORECASE)
 RETRY_DELAY = re.compile(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"')
+
+
+class APIError(RuntimeError):
+    """An error reply from a model API; code is its HTTP status."""
+
+    def __init__(self, message, code):
+        super().__init__(message)
+        self.code = code
+
+
+def get_json(url, headers, label, timeout=15):
+    """GET url once and return the decoded reply; used for cheap checks such as a key's validity."""
+    with _open(url, None, headers, label, 1, timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
 
 
 def post_json(url, body, headers, label, retries=5, timeout=600):
@@ -48,11 +62,12 @@ def post_sse(url, body, headers, label, retries=5, timeout=600):
 
 
 def _open(url, body, headers, label, retries, timeout):
-    """Open the POST request, retrying transient failures; return the response."""
-    payload = json.dumps(body).encode("utf-8")
+    """Open the request (a GET when body is None), retrying transient failures; return the response."""
+    payload = None if body is None else json.dumps(body).encode("utf-8")
     headers = {"Content-Type": "application/json", **headers}
     for attempt in range(retries):
-        request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+        request = urllib.request.Request(url, data=payload, headers=headers,
+                                         method="GET" if payload is None else "POST")
         last_try = attempt == retries - 1
         wait = 2 ** attempt * 2
         try:
@@ -62,15 +77,27 @@ def _open(url, body, headers, label, retries, timeout):
             err.close()
             daily = err.code == 429 and DAILY_QUOTA.search(detail)
             if err.code not in RETRYABLE or last_try or daily:
-                hint = " (daily quota used up; it resets tomorrow)" if daily else ""
-                raise RuntimeError(f"{label} API error {err.code}{hint}: "
-                                   f"{detail[:DETAIL_CHARS]}") from err
+                hint = (" (daily quota used up; it resets tomorrow)" if daily else
+                        " (the API key was rejected: run `zill setup`)"
+                        if err.code in (401, 403) else "")
+                raise APIError(f"{label} API error {err.code}{hint}: {_message(detail)}",
+                               err.code) from err
             wait = max(wait, _server_wait(err.headers or {}, detail))
         except (urllib.error.URLError, TimeoutError) as err:
             if last_try:
                 raise RuntimeError(f"{label} API unreachable: {err}") from err
         time.sleep(min(wait, MAX_WAIT))
     raise RuntimeError(f"{label} API request failed after retries")
+
+
+def _message(detail):
+    """The server's own error message from a JSON error body, else the body's start."""
+    try:
+        error = json.loads(detail).get("error")
+        message = error.get("message") if isinstance(error, dict) else error
+    except (ValueError, AttributeError):
+        message = None
+    return message if isinstance(message, str) and message else detail[:DETAIL_CHARS]
 
 
 def _server_wait(headers, detail):

@@ -19,6 +19,11 @@ MODEL_INFO = {"supports_tools": True, "supports_parallel_tools": True,
               "max_output_tokens": 65536}
 
 
+def auth_headers(key):
+    """Return the headers that authenticate key."""
+    return {"x-goog-api-key": key}
+
+
 def model_info(model):
     """Return what model supports: tools, parallel calls, window and output sizes."""
     return dict(MODEL_INFO)
@@ -66,7 +71,7 @@ def complete(model, system, messages, tools, base, key, on_text=None):
     }
     if tools:
         body["tools"] = [{"functionDeclarations": [t["schema"] for t in tools]}]
-    headers = {"x-goog-api-key": key}
+    headers = auth_headers(key)
     if on_text is None:
         chunks = [post_json(f"{base}/models/{model}:generateContent", body, headers, "Gemini")]
     else:  # each SSE event is a partial response with the same shape
