@@ -1,3 +1,9 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/AkbarSheikh-debug/ZILL-Harness/main/assets/zill-logo.png"
+       alt="ZILL Harness logo: a metallic Z orbited by a ring, with the words ZILL_HARNESS, Autonomous Coding Agent"
+       width="420">
+</p>
+
 # ZILL Harness
 
 **ZILL** is a concise coding-agent harness: a terminal coding agent you can
