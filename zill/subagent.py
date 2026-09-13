@@ -12,6 +12,8 @@ Design rules:
     to do the work itself, so delegation can never loop forever.
   * The factory is injected. subagent.py knows nothing about how a harness is
     built, which keeps it free of a circular import with harness.py.
+  * Spawning is read-risk: the child runs under the parent's Policy, so each
+    of its tool calls is gated on its own and approving twice adds nothing.
 """
 
 from .tools import tool
@@ -25,7 +27,7 @@ def subagent_tool(make_harness, depth=0, max_depth=2):
           "context. The child cannot see this conversation, so the task must "
           "include every path, requirement and detail it needs. Returns the "
           "child's final report.",
-          task="Complete, standalone instructions for the sub-agent")
+          risk="read", task="Complete, standalone instructions for the sub-agent")
     def spawn_agent(task):
         if depth >= max_depth:
             return DEPTH_LIMIT

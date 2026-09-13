@@ -68,12 +68,18 @@ zill --resume -d ./myproject                  # continue the latest session ther
 | `-d, --workdir` | Directory the agent works in (default `.`). |
 | `-m, --model` | `provider:model` (see Providers). |
 | `--mode` | `safe`, `yolo` or `read-only`. Default: `safe` interactively, `yolo` with `-p`. |
+| `--dry-run` | Plan and inspect only: every call that is not a read is blocked, sub-agents included. |
 | `--resume` | Load the newest session in the workdir before running. |
 | `--max-turns` | Tool turns allowed per task (default 120). |
 
 In safe mode, every call that changes state asks
 `approve bash({"command": ...})? [y/N]`. Ctrl-C stops the current run without
 losing the session. Ctrl-D exits.
+
+Every tool call is written to `.zill/audit.jsonl` with its risk
+(`read`, `write`, `execute`, `network`, `destructive`), the policy decision,
+duration and status, with secrets redacted. It's the quickest way to see what
+the agent did and why.
 
 ## Anatomy
 
@@ -84,7 +90,8 @@ losing the session. Ctrl-D exits.
 | `credentials.py` | Keys from the environment or `~/.zill/credentials.json` (mode 0600), and `redact()`, which masks every known secret before anything is printed. |
 | `loop.py` | The agent loop: call the model, run the tools it asks for, repeat. Tool errors become results the model reads, never crashes. |
 | `tools.py` | The `@tool` decorator and six core tools: read, write, edit, bash, list, grep. File paths are confined to the workdir. |
-| `security.py` | `Policy`: deny patterns for catastrophic commands, plus `read-only`, `safe` and `yolo` modes with an approver hook. |
+| `security.py` | `Policy.decide()`: classifies each call by risk (bash by what the command does), denies destructive calls in every mode, and applies `read-only`, `safe`, `yolo` and dry-run. |
+| `audit.py` | `.zill/audit.jsonl`: one redacted line per tool call with risk, decision, duration and status. |
 | `context.py` | Compaction. Over the token budget, older turns are summarised and the recent tail is kept verbatim. |
 | `memory.py` | `ZILL.md` project memory, loaded into the system prompt, and the `remember` tool that appends to it. |
 | `skills.py` | `skills/<name>/SKILL.md`. A one-line catalog sits in the prompt, and the full text loads on demand via `use_skill`. |
@@ -105,7 +112,7 @@ from zill import Harness, Policy, tool
 
 
 @tool("Fetch a URL and return the first 4000 characters of its body.",
-      url="An http or https URL")
+      risk="network", url="An http or https URL")
 def fetch(url):
     if not url.startswith(("http://", "https://")):
         return "ERROR: only http and https URLs are allowed"

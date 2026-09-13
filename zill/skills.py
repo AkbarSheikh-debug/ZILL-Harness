@@ -56,7 +56,7 @@ def read_skill(workdir, name):
 
 def skill_tools(workdir):
     """Return the use_skill tool, bound to workdir's skills."""
-    @tool("Load the full instructions of a skill from the catalog in the system prompt.",
+    @tool("Load the full instructions of a skill from the catalog in the system prompt.", risk="read",
           name="Skill name exactly as listed in the catalog")
     def use_skill(name):
         return read_skill(workdir, name)

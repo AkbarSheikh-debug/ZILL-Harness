@@ -37,18 +37,25 @@ MAX_GREP_LINE = 200
 
 @dataclass
 class Tool:
-    """A callable the model may invoke: spec is {"schema": ...}, run executes it."""
+    """A callable the model may invoke: spec is {"schema": ...}, run executes it.
+
+    source says where it came from (builtin, mcp, plugin, connector) and risk
+    what it can do (see security.RISKS); Policy reads both, the model neither.
+    """
 
     name: str
     spec: dict
     run: Callable
+    source: str = "builtin"
+    risk: str = "execute"
 
 
-def tool(description, **params):
+def tool(description, risk="execute", source="builtin", **params):
     """Turn a plain function into a Tool whose schema mirrors its signature.
 
     params maps each argument name to the description the model sees.
-    Arguments with defaults are optional; the rest are required.
+    Arguments with defaults are optional; the rest are required. Undeclared
+    risk is "execute", so an unknown tool needs approval in safe mode.
     """
     def wrap(fn):
         signature = inspect.signature(fn).parameters.values()
@@ -58,7 +65,7 @@ def tool(description, **params):
         schema = {"name": fn.__name__, "description": description,
                   "parameters": {"type": "object", "properties": properties,
                                  "required": required}}
-        return Tool(name=fn.__name__, spec={"schema": schema}, run=fn)
+        return Tool(name=fn.__name__, spec={"schema": schema}, run=fn, source=source, risk=risk)
     return wrap
 
 
@@ -96,7 +103,7 @@ def core_tools(workdir):
         base = rel.rsplit("/", 1)[-1]
         return any(fnmatch.fnmatch(rel, p) or fnmatch.fnmatch(base, p) for p in candidates)
 
-    @tool("Read a text file; lines come back numbered as N<TAB>line.",
+    @tool("Read a text file; lines come back numbered as N<TAB>line.", risk="read",
           path="File path relative to the working directory")
     def read_file(path):
         with open(resolve(path), encoding="utf-8", errors="replace") as f:
@@ -106,7 +113,7 @@ def core_tools(workdir):
             shown += f"\n... truncated: showing {MAX_READ_LINES} of {len(lines)} lines"
         return shown
 
-    @tool("Create or overwrite a file with the given content.",
+    @tool("Create or overwrite a file with the given content.", risk="write",
           path="File path relative to the working directory",
           content="The complete new file content")
     def write_file(path, content):
@@ -116,7 +123,7 @@ def core_tools(workdir):
             f.write(content)
         return f"Wrote {len(content)} chars to {path}"
 
-    @tool("Replace one exact snippet in a file. The snippet must occur exactly once.",
+    @tool("Replace one exact snippet in a file. The snippet must occur exactly once.", risk="write",
           path="File path relative to the working directory",
           old="Exact text to replace, copied from the file",
           new="Replacement text")
@@ -151,7 +158,7 @@ def core_tools(workdir):
             output = f"{output[:half]}\n... [{cut} chars truncated] ...\n{output[-half:]}"
         return output or f"(exit {proc.returncode}, no output)"
 
-    @tool("List files whose relative path or basename matches a glob.",
+    @tool("List files whose relative path or basename matches a glob.", risk="read",
           pattern="Glob such as **/*.py or *.md (default **/*)")
     def list_files(pattern="**/*"):
         hits = sorted(rel for rel, _ in walk() if matches(rel, pattern))
@@ -160,7 +167,7 @@ def core_tools(workdir):
             hits = hits[:MAX_LIST_ENTRIES] + [f"... and {extra} more"]
         return "\n".join(hits) or "(no files match)"
 
-    @tool("Search file contents with a regular expression; returns path:lineno: text.",
+    @tool("Search file contents with a regular expression; returns path:lineno: text.", risk="read",
           regex="Python regular expression to search for",
           pattern="Glob limiting which files are searched (default *)")
     def grep(regex, pattern="*"):
