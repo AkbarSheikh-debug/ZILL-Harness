@@ -265,20 +265,25 @@ same way to every tool source.
 
 The goal is that a new developer can clone it, read it, trust it, and extend it.
 
-- [ ] **Integration test:** builtins, a skill, a plugin, a connector, a local MCP
-      server, memory, a persistent session, safe policy, a sub-agent and
-      the audit log in one run. The transcript shows the source of each tool used.
-- [ ] **`evals/`:** real-model tasks with mechanical assertions (coding, web
-      page, security refusals, memory recall, MCP, plugins, connectors). Run
-      manually or on a schedule, not on every PR.
-- [ ] **README:** the architecture diagram, the concepts table, and one example
-      each of registering a tool, loading a plugin, connecting an MCP server,
-      building a connector, and running `zill mcp serve`.
-- [ ] **SECURITY.md:** ZILL is not a sandbox; Python plugins are trusted code;
-      MCP servers and all tool output are untrusted; approval is
-      defense in depth; destructive operations are denied by default; run untrusted
-      agents in an OS or container sandbox.
-- [ ] Publish `zill-harness` on PyPI with trusted publishing, plus a terminal demo GIF.
+- [x] **Integration test** (`tests/test_integration.py`): builtins, a skill, a plugin, a
+      connector, a local MCP server, memory, a persistent session, safe policy with
+      approvals, a sub-agent, checkpoints and the audit log in one run. The audit log shows
+      the source, risk and decision of each tool used.
+- [x] **`evals/`:** 16 real-model tasks with mechanical checks (coding, web page, security
+      refusals, memory recall, MCP, plugins, connectors). They run manually or from the
+      `Evals` workflow, never on every PR.
+- [x] **README:** the architecture diagram, how a call flows from model to tool to
+      audit, the concepts table, and examples of registering a tool, loading a plugin,
+      building a connector, connecting an MCP server, and running `zill mcp serve`.
+- [x] **SECURITY.md:** ZILL is not a sandbox; Python plugins are trusted code; MCP servers
+      and all tool output are untrusted; approval is defense in depth; destructive operations
+      are denied; projects get no automatic trust; run untrusted agents in a sandbox.
+- [x] **Release pipeline:** `release.yml` publishes `zill-harness` to PyPI with trusted
+      publishing when a GitHub release is published. The one-time pypi.org publisher setup
+      is the maintainer's step.
+- [ ] Terminal demo GIF (needs a real recorded session).
+- [x] **Release checks in CI:** standard-library-only core, no committed secrets, and a
+      consistent version and changelog.
 
 **Final check:**
 ```sh

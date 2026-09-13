@@ -5,7 +5,7 @@ callers hand the agent their own functions; run_fleet runs many harnesses
 side by side.
 """
 
-__version__ = "0.2.0.dev0"  # defined before the imports below: harness.py reads it
+__version__ = "1.0.0"  # defined before the imports below: harness.py reads it
 
 from .fleet import run_fleet  # noqa: E402
 from .harness import Harness  # noqa: E402

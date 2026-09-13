@@ -1,0 +1,46 @@
+name: Evals
+
+# Real-model evals spend API quota, so they run only when started by hand.
+# Add the key for your model as a repository secret (for example GEMINI_API_KEY).
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "provider:model, e.g. gemini:gemini-3.6-flash or anthropic:claude-opus-5"
+        required: true
+      only:
+        description: "optional: comma-separated categories or case names"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Run evals
+        env:
+          MODEL: ${{ inputs.model }}
+          ONLY: ${{ inputs.only }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          if [ -n "$ONLY" ]; then
+            python evals/run.py -m "$MODEL" --only "$ONLY" --json eval-report.json
+          else
+            python evals/run.py -m "$MODEL" --json eval-report.json
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-report
+          path: eval-report.json
