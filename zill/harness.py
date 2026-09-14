@@ -80,6 +80,7 @@ class Harness:
         self.todo = ""
         self.stream = stream
         self.usage = {"calls": 0, "input": 0, "output": 0}  # model calls this harness made
+        self.last_input = 0  # input tokens the provider reported for the latest call
 
         self.tools = {t.name: t for t in core_tools(self.workdir) + web.web_tools()}
         self.notes, self._mcp_clients = [], []  # extension problems, and servers to close
@@ -148,6 +149,7 @@ class Harness:
             self._flush()
             if kind == "provider_end":
                 self.usage["calls"] += 1
+                self.last_input = payload["usage"].get("input", 0)
                 for field in ("input", "output"):
                     self.usage[field] += payload["usage"].get(field, 0)
             if kind == "tool_end":
@@ -232,6 +234,24 @@ class Harness:
     def clear(self):
         """Start a fresh conversation; the next run opens a new session file."""
         self.messages, self._recorded, self.session_path, self.todo = [], 0, None, ""
+        self.last_input = 0
+
+    def set_model(self, model):
+        """Switch the model for later turns and resize the compaction budget to its window."""
+        self.model = model
+        self.budget_tokens = int(provider.model_info(model).get("context_window", 1_000_000)
+                                 * COMPACT_AT)
+        self.last_input = 0  # the old provider's count says nothing about the new one
+
+    def context_usage(self):
+        """Estimate what the next request holds, by part, against the model's window."""
+        system = len(self.system) // context.CHARS_PER_TOKEN
+        tools = sum(len(str(t.spec)) for t in self.tools.values()) // context.CHARS_PER_TOKEN
+        messages = context.estimate_tokens(self.messages)
+        return {"window": provider.model_info(self.model).get("context_window", 1_000_000),
+                "compact_at": self.budget_tokens, "system": system, "tools": tools,
+                "messages": messages, "total": system + tools + messages,
+                "reported": self.last_input}
 
     def compact(self):
         """Summarise older turns now, whatever the budget; return (before, after) counts."""
