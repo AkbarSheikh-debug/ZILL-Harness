@@ -81,12 +81,21 @@ class Context:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             return cli.main(list(argv))
 
-    def run(self, prompt, mode="yolo", **kwargs):
-        """Run one task in a fresh persistent harness; return (harness, final text)."""
+    def harness(self, mode="yolo", plan=False, **kwargs):
+        """Build a persistent harness on the project, closed when the case ends."""
         kwargs.setdefault("max_turns", 30)
-        harness = Harness(self.workdir, model=self.model, policy=Policy(mode), **kwargs)
+        harness = Harness(self.workdir, model=self.model, policy=Policy(mode, plan=plan), **kwargs)
         self.harnesses.append(harness)
+        return harness
+
+    def run(self, prompt, mode="yolo", plan=False, **kwargs):
+        """Run one task in a fresh persistent harness; return (harness, final text)."""
+        harness = self.harness(mode, plan, **kwargs)
         return harness, harness.run(prompt)
+
+    def used(self, tool, status="ok"):
+        """Return the audit entries of tool calls to tool that ended with status."""
+        return [e for e in self.audit() if e["tool"] == tool and e["status"] == status]
 
     def audit(self):
         path = self.path(".zill/audit.jsonl")
@@ -315,6 +324,155 @@ def connector_policy_denial(ctx):
     ctx.run("Create a note called blocked containing 'x'.", mode="read-only")
     denied = any(e["decision"] == "denied" for e in ctx.audit() if e["source"] == "connector")
     return not ctx.exists("notes/blocked.md"), f"note blocked; denial audited={denied}"
+
+
+# --- workbench: jobs, terminals, code navigation, questions, plans, goals, agents -----
+
+@case("workbench")
+def background_job_and_persistent_terminal(ctx):
+    ctx.write("data/marker.txt", "here")
+    _, answer = ctx.run(
+        f"Do two things. 1) Start this command as a background job (bash with background "
+        f"set to true): {PYTHON} -c \"import time; time.sleep(2); print('JOB-DONE-7')\" and "
+        f"later read its output with job_output. 2) Open a persistent terminal, cd into the "
+        f"data folder with one terminal_send, then list the files there with a second "
+        f"terminal_send. Finish by telling me the job's output and the file name you found.")
+    jobs = [e for e in ctx.used("bash") if str(e["args"].get("background")).lower() == "true"]
+    sends = ctx.used("terminal_send")
+    checks = {"background job": bool(jobs), "job_output": bool(ctx.used("job_output")),
+              "two terminal sends": len(sends) >= 2, "job output reported": "JOB-DONE-7" in answer,
+              "file found from the terminal": "marker.txt" in answer}
+    return all(checks.values()), ", ".join(f"{k}={v}" for k, v in checks.items())
+
+
+@case("workbench")
+def navigate_code_structurally(ctx):
+    ctx.write("inventory.py", "class Store:\n    def __init__(self):\n        self.items = {}\n\n"
+                              "    def restock(self, item, qty):\n"
+                              "        \"\"\"Add qty of item to the shelf.\"\"\"\n"
+                              "        self.items[item] = self.items.get(item, 0) + qty\n")
+    ctx.write("app.py", "from inventory import Store\n\nstore = Store()\nstore.restock('tea', 3)\n")
+    _, answer = ctx.run("Use the code_nav tool (not grep) to find where the method restock is "
+                        "defined and which file calls it. Answer with the definition's file and "
+                        "line, and the caller's file.")
+    checks = {"code_nav used": bool(ctx.used("code_nav")), "definition": "inventory.py" in answer,
+              "line 5": "5" in answer, "caller": "app.py" in answer}
+    return all(checks.values()), ", ".join(f"{k}={v}" for k, v in checks.items())
+
+
+@case("workbench")
+def ask_the_user_then_get_the_plan_approved(ctx):
+    asked = []
+
+    def asker(request):
+        asked.append(request["kind"])
+        return "Python" if request["kind"] == "question" else {"approved": True, "feedback": ""}
+
+    harness, _ = ctx.run("Create a hello-world script in the language I prefer. First ask me "
+                         "which language with ask_user_question, offering the options Python and "
+                         "Ruby. Then call exit_plan_mode with a short plan, and once it is "
+                         "approved, write the script.", mode="yolo", plan=True, asker=asker)
+    entries = [e["tool"] for e in ctx.audit() if e["status"] == "ok"]
+    approved_at = entries.index("exit_plan_mode") if "exit_plan_mode" in entries else len(entries)
+    blocked_first = "write_file" not in entries[:approved_at]
+    checks = {"asked a question": "question" in asked, "plan reviewed": "plan" in asked,
+              "plan mode ended": not harness.policy.plan, "hello.py written": ctx.exists("hello.py"),
+              "no ruby": not ctx.exists("hello.rb"), "nothing changed before approval": blocked_first}
+    return all(checks.values()), ", ".join(f"{k}={v}" for k, v in checks.items())
+
+
+@case("workbench")
+def present_a_deliverable(ctx):
+    ctx.write("notes.txt", "alpha\nbeta\n")
+    harness, _ = ctx.run("Write SUMMARY.md describing what notes.txt contains, then hand "
+                         "SUMMARY.md to me with the present tool.")
+    presented = [f["path"] for f in harness.presented]
+    return "SUMMARY.md" in presented and ctx.exists("SUMMARY.md"), f"presented={presented}"
+
+
+@case("workbench")
+def pursue_a_goal_until_complete(ctx):
+    harness = ctx.harness()
+    harness.pursue("Create one.txt, two.txt and three.txt, each containing its number as a "
+                   "digit. When all three exist, call update_goal with status complete.",
+                   max_rounds=4)
+    files = all(ctx.exists(n) and ctx.read(n).strip() == d
+                for n, d in (("one.txt", "1"), ("two.txt", "2"), ("three.txt", "3")))
+    status = (harness.goal or {}).get("status")
+    return files and status == "complete", f"files ok={files}; goal={harness.goal}"
+
+
+@case("workbench")
+def run_a_workflow_of_sub_agents(ctx):
+    ctx.run("Use the workflow tool with two steps. Step 'words' writes words.txt containing "
+            "exactly the three words: red green blue. Step 'count' runs after 'words', reads "
+            "words.txt and writes count.txt containing only the number of words.")
+    count = ctx.read("count.txt").strip() if ctx.exists("count.txt") else None
+    checks = {"workflow used": bool(ctx.used("workflow")), "words.txt": ctx.exists("words.txt"),
+              "count is 3": count == "3"}
+    return all(checks.values()), ", ".join(f"{k}={v}" for k, v in checks.items())
+
+
+@case("workbench")
+def continue_a_background_sub_agent(ctx):
+    ctx.run("Spawn a sub-agent in the background (spawn_agent with background true) that writes "
+            "alpha.txt containing alpha. Then call list_agents until it reports done, and use "
+            "send_message to ask that same agent to also write beta.txt containing beta. "
+            "Finish when both files exist.")
+    checks = {"background spawn": any(str(e["args"].get("background")).lower() == "true"
+                                      for e in ctx.used("spawn_agent")),
+              "send_message used": bool(ctx.used("send_message")),
+              "alpha.txt": ctx.exists("alpha.txt"), "beta.txt": ctx.exists("beta.txt")}
+    return all(checks.values()), ", ".join(f"{k}={v}" for k, v in checks.items())
+
+
+@case("workbench")
+def find_a_decision_in_an_earlier_session(ctx):
+    ctx.run("Note for this project: the release codename is BLUEFIN-42. Just acknowledge it in "
+            "one sentence without using any tools.")
+    _, answer = ctx.run("What is the release codename? Use session_search to look through "
+                        "earlier conversations, then answer.")
+    checks = {"session_search used": bool(ctx.used("session_search")),
+              "codename": "BLUEFIN-42" in answer}
+    return all(checks.values()), ", ".join(f"{k}={v}" for k, v in checks.items())
+
+
+@case("workbench")
+def steer_a_running_task(ctx):
+    steered = []
+
+    def on_event(kind, payload):
+        if kind == "tool_end" and not steered:
+            steered.append(True)
+            harness.steer("Also create extra.txt containing the word steered.")
+
+    harness = ctx.harness(on_event=on_event)
+    harness.run("Create first.txt containing first. Then check the files in the folder and "
+                "finish with a one-line summary.")
+    extra = ctx.exists("extra.txt") and "steered" in ctx.read("extra.txt")
+    return ctx.exists("first.txt") and extra, f"first.txt={ctx.exists('first.txt')}; extra={extra}"
+
+
+@case("workbench")
+def stop_a_running_task(ctx):
+    from zill.harness import Interrupted
+
+    def on_event(kind, payload):
+        if kind == "tool_start":
+            harness.stop()
+
+    harness = ctx.harness(on_event=on_event)
+    try:
+        harness.run("Create a.txt, b.txt and c.txt, each with its letter, one write_file call "
+                    "at a time.")
+        return False, "the run was not interrupted"
+    except Interrupted:
+        harness.resume(harness.session_path)
+    calls = {c["id"] for m in harness.messages for c in m.get("tool_calls") or []}
+    answered = {m["id"] for m in harness.messages if m["role"] == "tool"}
+    consistent = calls <= answered  # every call has a result, run or "Interrupted"
+    written = [n for n in ("a.txt", "b.txt", "c.txt") if ctx.exists(n)]
+    return consistent and len(written) < 3, f"every call answered={consistent}; written={written}"
 
 
 def main(argv=None):

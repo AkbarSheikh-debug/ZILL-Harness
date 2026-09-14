@@ -13,7 +13,10 @@ Design rules:
     Policy and the profile's mode still gate them.
 """
 
-READS = ["read_file", "list_files", "grep", "todo", "use_skill", "spawn_agent"]
+READS = ["read_file", "list_files", "grep", "todo", "use_skill", "spawn_agent", "send_message",
+         "list_agents", "interrupt_agent", "workflow", "code_nav", "session_search",
+         "ask_user_question", "exit_plan_mode", "present", "create_goal", "get_goal",
+         "update_goal", "job_output", "job_list", "terminal_read"]
 
 PROFILES = {
     "coding": {"prompt": "", "tools": None, "mode": None},

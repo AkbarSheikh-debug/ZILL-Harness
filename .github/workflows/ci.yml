@@ -55,11 +55,11 @@ jobs:
           core = count(p for p in files if not edges & set(p.parts))
           edge = count(p for p in files if edges & set(p.parts))
           print(f"runtime dependencies: {deps or 'none'}")
-          print(f"core lines: {core} / 3500   edge lines: {edge} / 1500")
+          print(f"core lines: {core} / 4500   edge lines: {edge} / 1500")
           if deps:
               sys.exit("ZILL must have zero runtime dependencies")
-          if core > 3500:
-              sys.exit("core is over the 3500-line budget; make it smaller")
+          if core > 4500:
+              sys.exit("core is over the 4500-line budget; make it smaller")
           if edge > 1500:
               sys.exit("edge packages are over the 1500-line budget; make them smaller")
           EOF

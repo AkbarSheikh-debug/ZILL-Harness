@@ -88,7 +88,7 @@ def run_loop(model, system, messages, tools, on_event, before_tool,
             break
 
     note = STUCK.format(name=stuck) if stuck else TURN_LIMIT
-    messages.append({"role": "user", "text": note})
+    messages.append({"role": "user", "text": note, "auto": "limit"})
     return _call_model(model, system, messages, [], on_event, stream)["text"]
 
 

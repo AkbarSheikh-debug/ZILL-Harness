@@ -37,8 +37,9 @@ large work.
 |---|---|
 | Runtime dependencies | **Zero.** Standard library only. |
 | Python | 3.10+ |
-| Core, `zill/*.py` | **≤ 3,500 lines** |
+| Core, `zill/*.py` | **≤ 4,500 lines** (raised from 3,500 for the workbench tools) |
 | Edge packages (`zill/mcp/`, `zill/plugins/`) | **≤ 1,500 lines** |
+| The app, [ZILL-UI](https://github.com/AkbarSheikh-debug/ZILL-UI) `zill_ui/*.py` | **≤ 1,500 lines**, in its own repository |
 | Tests, examples, evals | Not counted, but kept readable |
 
 Config files are **JSON**, because `tomllib` needs Python 3.11 and ZILL

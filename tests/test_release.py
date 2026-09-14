@@ -87,6 +87,12 @@ class ReleaseChecks(unittest.TestCase):
         self.assertIn('version = { attr = "zill.__version__" }', pyproject)
         self.assertIn("dependencies = []", pyproject)
 
+    def test_zill_ui_explains_how_to_add_the_app_when_it_is_missing(self):
+        with mock.patch("importlib.import_module", side_effect=ImportError), \
+                redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(cli.main(["ui"]), 1)
+        self.assertIn('pip install "zill-harness[ui]"', err.getvalue())
+
     def test_final_check_commands(self):
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.dict(os.environ, {"ZILL_HOME": tmp, "GEMINI_API_KEY": "gm-release-check-1"}), \

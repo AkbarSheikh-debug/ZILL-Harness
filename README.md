@@ -64,6 +64,7 @@ zill run "summarise the open TODOs" --json         # one JSON object, for script
 
 | Command | What it does |
 |---|---|
+| `zill ui` | Open the same agent as a local browser app (the `zill-ui` package). |
 | `zill setup` | Paste API keys (hidden input). |
 | `zill doctor` | Check Python, git, config, keys, MCP servers and plugins, with fixes. |
 | `zill inspect` | Show what a run would get: model, mode, and every tool with its source and risk. |
@@ -80,12 +81,54 @@ zill run "summarise the open TODOs" --json         # one JSON object, for script
 | `--mode` | `safe` (asks before changes), `yolo` (no questions) or `read-only`. Default: `safe` interactively, `yolo` headless. |
 | `--profile` | `coding` (default), `reviewer` and `research` (read-only), or `writing` (no shell). |
 | `--dry-run` | Plan and inspect only: every call that is not a read is blocked. |
+| `--plan` | Plan mode: the agent reads, then asks you to approve a plan before changing anything. |
+| `--goal` | Treat the task as a goal: keep taking turns until the agent marks it complete (up to 20). |
 | `--verify` | A run is done only when this command passes. |
 | `--json` | Headless: print one JSON object with the result, usage and cost. |
 | `--resume` | Load the newest session in the workdir first. |
 
-In interactive mode, type `/help` for `/cost /model /mode /compact /clear /todo
-/undo /checkpoints /sessions /skills /exit`. Replies stream as they are written.
+In interactive mode, type `/help` for `/cost /context /model /mode /compact /clear
+/plan /goal /retry /branch /jobs /kill /search /feedback /todo /undo /checkpoints
+/sessions /skills /exit`. Replies stream as they are written. When the agent asks
+a question or proposes a plan, answer it at the prompt.
+
+### Or use the app
+
+Prefer a window to a terminal? `zill ui` opens the same agent as a dark, local
+app. It lives in its own repository and package,
+[ZILL-UI](https://github.com/AkbarSheikh-debug/ZILL-UI), so ZILL itself stays
+concise, and the one-line installers above add it for you.
+
+```sh
+zill ui                      # this folder; opens a Chrome or Edge app window, else a browser tab
+zill ui -d ./myproject --resume
+pip install "zill-harness[ui]"   # add the app to a pip install
+```
+
+The app has saved conversations with search, and cards for approvals, questions
+and plan reviews. You can queue a message while ZILL works, or steer the running
+task. Each reply can be retried, edited, branched and rated. A side panel shows
+the plan, goal, background jobs, sub-agents and delivered files. There is also
+a trajectory view, file attachments and a workspace picker. Sessions, keys and
+checkpoints are shared with the terminal, so a conversation started in one
+continues in the other.
+
+### What the agent can do
+
+| Tools | For |
+|---|---|
+| `read_file`, `write_file`, `edit_file`, `list_files`, `grep` | Files, confined to the workdir. |
+| `bash` (with `background`), `job_output`, `job_list`, `job_kill` | Commands, and servers or builds that keep running. |
+| `terminal_open`, `terminal_send`, `terminal_read`, `terminal_close` | Shells that keep `cd` and environment between calls. |
+| `code_nav` | Symbols, definitions, references and signatures (exact for Python). |
+| `ask_user_question`, `exit_plan_mode`, `present` | Asking you, getting a plan approved, handing over files. |
+| `todo`, `create_goal`, `get_goal`, `update_goal` | Checklists, and goals that span turns. |
+| `spawn_agent`, `send_message`, `list_agents`, `interrupt_agent`, `workflow` | Sub-agents that keep their conversation, and parallel workflows. |
+| `session_search`, `remember`, `web_fetch`, `web_search` | Earlier conversations, project memory, the web. |
+
+Every tool passes through the same policy: reads are free, changes ask in safe
+mode, plan mode blocks them until you approve, and destructive commands are
+always refused.
 
 ### Providers
 
@@ -299,8 +342,12 @@ python evals/run.py --list                          # coding, web, security, mem
 | `context.py` | Compaction within the token budget. |
 | `memory.py` | `ZILL.md` memory and the system prompt. |
 | `skills.py` | The on-demand skills catalog. |
-| `subagent.py` | `spawn_agent`, with bounded depth. |
-| `todo.py` | The checklist tool. |
+| `subagent.py` | Continuable sub-agents and workflows, with bounded depth. |
+| `todo.py`, `goal.py` | The checklist tool, and goals pursued over many turns. |
+| `interact.py` | Questions for the user, plan mode approval, presented files. |
+| `jobs.py` | Background jobs and persistent terminals. |
+| `codenav.py` | Structural code navigation. |
+| `history.py` | Session listing, search, titles, deletion and feedback. |
 | `checkpoints.py` | Shadow-git snapshots and undo. |
 | `hooks.py`, `config.py`, `settings.py`, `profiles.py` | Project automation, config, run settings, presets. |
 | `credentials.py`, `trust.py`, `cost.py` | Keys and redaction, approvals, and the cost meter. |
@@ -310,7 +357,7 @@ python evals/run.py --list                          # coding, web, security, mem
 
 ## Contributing
 
-ZILL stays small on purpose: zero runtime dependencies, a 3,500-line core, and
+ZILL stays small on purpose: zero runtime dependencies, a 4,500-line core, and
 1,500 lines for edge packages, all enforced in CI. Fork it, branch, and send a
 pull request. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and
 [ROADMAP.md](ROADMAP.md).

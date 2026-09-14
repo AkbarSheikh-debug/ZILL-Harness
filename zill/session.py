@@ -61,7 +61,7 @@ def load(path):
                 messages.append(json.loads(line))
             except json.JSONDecodeError:
                 break  # torn tail: the process died mid-write
-    return _repair(_upgrade(messages))
+    return repair(_upgrade(messages))
 
 
 def latest(workdir):
@@ -84,7 +84,7 @@ def _upgrade(messages):
     return messages
 
 
-def _repair(messages):
+def repair(messages):
     """Answer each tool call of the last assistant message that has no result."""
     last = next((i for i in range(len(messages) - 1, -1, -1)
                  if messages[i]["role"] == "assistant"), None)

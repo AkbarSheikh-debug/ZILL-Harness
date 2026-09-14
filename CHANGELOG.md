@@ -7,6 +7,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Security
+- Tool results are redacted before the model sees them, not only on screen. A real
+  Flash eval showed a model echoing an API key it read from `bash` output; now it
+  only ever sees `[REDACTED]`. A file that holds a known key shows the same marker,
+  so an `edit_file` snippet cannot match that part of it.
 - Memory writes after untrusted content: once a network-risk call (`web_fetch`,
   `web_search`, `curl` and the like) or an MCP or connector tool has run in a task, or
   in one of its sub-agents, `remember` and file writes to `ZILL.md` need explicit
@@ -14,6 +18,32 @@ All notable changes to this project are documented here. The format follows
   gate lifts when the user gives the next task.
 
 ### Added
+- `zill ui` opens the browser app from the separate
+  [ZILL-UI](https://github.com/AkbarSheikh-debug/ZILL-UI) package. The `ui` extra
+  (`pip install "zill-harness[ui]"`) and the one-line installers add it; without it,
+  `zill ui` says how to install it. ZILL itself still has zero runtime dependencies.
+  `zill.UI_API` versions the harness surface the app builds on.
+- Background jobs: `bash` with `background` "true", then `job_output`, `job_list` and
+  `job_kill`. A finished job is announced on the next tool result.
+- Persistent terminals: `terminal_open`, `terminal_send`, `terminal_read` and
+  `terminal_close` keep `cd` and environment between calls. `terminal_send` input is
+  policed like `bash`.
+- `code_nav`: symbols, definitions, references and signatures, exact for Python and
+  pattern-based for other languages.
+- `ask_user_question` and `exit_plan_mode`, answered by the terminal or the app.
+  Plan mode (`--plan`, `/plan`) blocks every call that is not a read until the user
+  approves a plan, in every mode.
+- `present` hands finished files to the user.
+- Goals: `create_goal`, `get_goal` and `update_goal`. `/goal` and `--goal` keep taking
+  turns until the goal is complete or blocked, for up to 20 rounds.
+- Continuable sub-agents: `spawn_agent` can run in the background, and `send_message`,
+  `list_agents` and `interrupt_agent` manage children. `workflow` runs a dependency graph
+  of sub-agent tasks in parallel waves.
+- `session_search` finds text in earlier sessions. Sessions can be renamed and deleted,
+  and replies can be rated with `/feedback`, saved to `.zill/feedback.jsonl`.
+- Harness controls for front ends: `stop()` and `steer()` from any thread, plus
+  `rewind(turn)`, `branch(turn)` and `pursue()`. Terminal commands: `/retry`, `/branch`,
+  `/jobs`, `/kill` and `/search`. Each assistant message records its token usage.
 - Loop guard: when the same tool call returns the same result 3 times within the
   last 12 calls, the model is warned; at 5 the run stops with a tool-less wrap-up
   and a `loop_detected` event.
@@ -24,6 +54,9 @@ All notable changes to this project are documented here. The format follows
 - `read_file` takes `offset` and `limit`, so files longer than 4,000 lines can be paged.
 
 ### Changed
+- The core line budget is now 4,500 lines, to hold the tools above.
+- A user message the harness writes itself (verify failures, steering, the turn limit,
+  compaction summaries) carries an `auto` field, so turns count only what a person typed.
 - `bash` puts stderr in a `[stderr]` section and ends with `[exit code: N]` whenever a
   command fails, even if it printed output. Before, a failing command that printed
   anything looked the same as a passing one.

@@ -106,8 +106,11 @@ def bound_result(workdir, name, text):
     return text[:head] + note.format(len(text) - keep) + text[len(text) - (keep - head):]
 
 
-def core_tools(workdir):
-    """Return the six file and shell tools, all confined to workdir."""
+def core_tools(workdir, processes=None):
+    """Return the six file and shell tools, all confined to workdir.
+
+    With processes (a jobs.Processes), bash can start background jobs.
+    """
     root = os.path.realpath(workdir)
 
     def resolve(path):
@@ -185,10 +188,17 @@ def core_tools(workdir):
             f.write(text.replace(old, new, 1))
         return f"Edited {path}"
 
-    @tool("Run a shell command in the working directory; returns combined stdout and stderr.",
+    @tool("Run a shell command in the working directory; returns combined stdout and stderr. "
+          "For servers, watchers and long builds, set background to true and check on the "
+          "job later with job_output.",
           command="The shell command to run",
-          timeout="Seconds before the command is killed (default 120)")
-    def bash(command, timeout="120"):
+          timeout="Seconds before the command is killed (default 120)",
+          background="'true' to start it as a background job and return at once")
+    def bash(command, timeout="120", background="false"):
+        if str(background).lower() == "true":
+            if processes is None:
+                return "ERROR: background jobs are not available here; run it in the foreground"
+            return processes.start_job(command)
         seconds = float(timeout)
         try:
             proc = subprocess.run(command, shell=True, cwd=root, capture_output=True,

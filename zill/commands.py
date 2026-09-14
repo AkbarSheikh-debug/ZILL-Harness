@@ -16,19 +16,20 @@ Design rules:
 
 import argparse
 import getpass
-import glob
+import importlib
 import json
 import os
 import platform
 import shutil
 import sys
-import time
 
-from . import __version__, credentials, provider, session, settings, skills
+from . import __version__, credentials, history, provider, session, settings, skills
 from .checkpoints import Checkpoints
 from .fleet import run_fleet
 from .profiles import PROFILES
 from .security import MODES
+
+UI_INSTALL = 'pip install "zill-harness[ui]"   (with uv: uv tool install zill-harness --with zill-ui)'
 
 
 def _parser(name, description, json_flag=True):
@@ -213,24 +214,9 @@ def inspect(argv):
 def sessions(argv):
     """List saved sessions in a directory, newest first."""
     args = _parser("sessions", "List saved sessions, newest first.").parse_args(argv)
-    paths = glob.glob(os.path.join(os.path.realpath(args.workdir), session.SESSION_DIR,
-                                   "*.jsonl"))
-    rows = []
-    for path in sorted(paths, key=os.path.getmtime, reverse=True):
-        messages = session.load(path)
-        meta_path = f"{os.path.splitext(path)[0]}.meta.json"
-        meta = {}
-        if os.path.exists(meta_path):
-            with open(meta_path, encoding="utf-8") as f:
-                meta = json.load(f)
-        task = next((m["text"] for m in messages if m["role"] == "user"), "")
-        rows.append({"session": os.path.splitext(os.path.basename(path))[0],
-                     "modified": time.strftime("%Y-%m-%d %H:%M", time.localtime(
-                         os.path.getmtime(path))),
-                     "messages": len(messages), "model": meta.get("model"),
-                     "task": task[:80], "path": path})
+    rows = history.session_rows(args.workdir)
     lines = [f"{r['modified']}  {r['messages']:>4} msgs  {r['model'] or '?':<32} "
-             f"{credentials.redact(r['task'])}" for r in rows] or ["no sessions yet"]
+             f"{credentials.redact(r['title'])}" for r in rows] or ["no sessions yet"]
     _emit(rows, args.json, lines)
     return 0
 
@@ -325,6 +311,17 @@ def plugin(argv):
     return plugin_cli.main(argv)
 
 
+def ui(argv):
+    """`zill ui`: the same agent in a local browser app, from the optional zill-ui package."""
+    try:
+        app = importlib.import_module("zill_ui")  # optional: ZILL itself needs nothing extra
+    except ImportError:
+        print(f"The ZILL app is a separate package. Add it with:\n  {UI_INSTALL}\n"
+              f"then run `zill ui` again.", file=sys.stderr)
+        return 1
+    return app.main(argv)
+
+
 COMMANDS = {"setup": setup, "doctor": doctor, "inspect": inspect, "sessions": sessions,
             "checkpoints": checkpoints, "undo": undo, "fleet": fleet, "mcp": mcp,
-            "plugin": plugin}
+            "plugin": plugin, "ui": ui}
