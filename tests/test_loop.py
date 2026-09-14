@@ -94,6 +94,20 @@ class LoopScenarios(unittest.TestCase):
         self.assertEqual([(p["count"], p["stopped"]) for p in detected],
                          [(3, False), (4, False), (5, True)])
 
+    def test_large_results_from_any_source_are_bounded_and_saved(self):
+        @tool("Dump a lot of text.", source="plugin")
+        def dump():
+            return "start " + "z" * 50000 + " end"
+
+        replies = [call("dump")] * 3 + [text("done")]
+        with FakeProvider(*replies):
+            harness = self.harness(extra_tools=[dump])
+            harness.run("dump it")
+        results = [m["text"] for m in tool_results(harness)]
+        self.assertTrue(results[0].startswith("start ") and results[0].endswith(" end"))
+        self.assertIn("full output saved to .zill/spill/dump-", results[0])
+        self.assertIn("returned this exact result 3 times", results[2])  # same path each time
+
     def test_calls_that_make_progress_are_not_loops(self):
         replies = [call("write_file", path="a.txt", content=str(n)) for n in range(6)]
         with FakeProvider(*replies, text("done")):

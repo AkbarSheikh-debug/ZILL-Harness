@@ -13,11 +13,16 @@ Design rules:
     turns that into an "ERROR: ..." result, never a crash.
   * Recoverable misuse (a bad edit snippet, a timeout) returns an "ERROR: ..."
     string that tells the model how to fix its next call.
-  * Output is bounded: long files, long command output, and big listings are
-    truncated with a note, so one call cannot flood the context window.
+  * Output is bounded: big listings are truncated with a note, and the harness
+    passes every result through bound_result(), which keeps a head and tail
+    and saves the full text under .zill/spill, so no output is lost and one
+    call cannot flood the context window.
+  * bash always reports how a command ended: stderr in its own section and a
+    non-zero exit code on the last line, even when the command printed output.
 """
 
 import fnmatch
+import hashlib
 import inspect
 import os
 import re
@@ -29,7 +34,9 @@ from typing import Callable
 SHELL = os.environ.get("COMSPEC", "cmd.exe") if os.name == "nt" else "/bin/sh"
 IGNORED_DIRS = {".git", "node_modules", "__pycache__", ".venv"}
 MAX_READ_LINES = 4000
-MAX_BASH_CHARS = 12000
+MAX_RESULT_CHARS = 12000  # most a tool result may put into the conversation
+MAX_BASH_CHARS = 200_000  # a memory bound only; bound_result shortens what the model sees
+SPILL_DIR = ".zill/spill"
 MAX_LIST_ENTRIES = 500
 MAX_GREP_HITS = 200
 MAX_GREP_LINE = 200
@@ -69,6 +76,36 @@ def tool(description, risk="execute", source="builtin", **params):
     return wrap
 
 
+def bound_result(workdir, name, text):
+    """Return text, or its head and tail with a note, fitting MAX_RESULT_CHARS.
+
+    The full text is saved under SPILL_DIR and the note names the file. The
+    file name is a hash of the text, so a repeated result gets the same path
+    and the loop still recognises the repeat. read_file results are not saved,
+    because the file is already on disk; their note says to read a narrower
+    range. If the save fails, the full text is returned rather than lost.
+    """
+    if len(text) <= MAX_RESULT_CHARS:
+        return text
+    if name == "read_file":
+        hint = "read a narrower range with offset and limit"
+    else:
+        digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:16]
+        rel = f"{SPILL_DIR}/{re.sub(r'[^A-Za-z0-9_-]', '_', name)[:40]}-{digest}.txt"
+        try:
+            os.makedirs(os.path.join(workdir, SPILL_DIR), exist_ok=True)
+            with open(os.path.join(workdir, rel), "w", encoding="utf-8", errors="replace",
+                      newline="") as f:
+                f.write(text)
+        except OSError:
+            return text
+        hint = f"full output saved to {rel}; read_file it with offset and limit, or grep it"
+    note = "\n... [{} chars omitted: " + hint + "] ...\n"
+    keep = MAX_RESULT_CHARS - len(note.format(len(text)))  # the note fits inside the cap
+    head = keep // 2
+    return text[:head] + note.format(len(text) - keep) + text[len(text) - (keep - head):]
+
+
 def core_tools(workdir):
     """Return the six file and shell tools, all confined to workdir."""
     root = os.path.realpath(workdir)
@@ -104,13 +141,21 @@ def core_tools(workdir):
         return any(fnmatch.fnmatch(rel, p) or fnmatch.fnmatch(base, p) for p in candidates)
 
     @tool("Read a text file; lines come back numbered as N<TAB>line.", risk="read",
-          path="File path relative to the working directory")
-    def read_file(path):
+          path="File path relative to the working directory",
+          offset="Line number to start from (default 1)",
+          limit=f"Most lines to return (default and maximum {MAX_READ_LINES})")
+    def read_file(path, offset="1", limit=str(MAX_READ_LINES)):
         with open(resolve(path), encoding="utf-8", errors="replace") as f:
             lines = f.read().splitlines()
-        shown = "\n".join(f"{i}\t{line}" for i, line in enumerate(lines[:MAX_READ_LINES], 1))
-        if len(lines) > MAX_READ_LINES:
-            shown += f"\n... truncated: showing {MAX_READ_LINES} of {len(lines)} lines"
+        start, count = max(int(offset), 1), min(max(int(limit), 1), MAX_READ_LINES)
+        if lines and start > len(lines):
+            return f"ERROR: offset {start} is past the end of {path} ({len(lines)} lines)"
+        chosen = lines[start - 1:start - 1 + count]
+        shown = "\n".join(f"{i}\t{line}" for i, line in enumerate(chosen, start))
+        end = start + len(chosen) - 1
+        if start > 1 or end < len(lines):
+            more = f"; continue with offset {end + 1}" if end < len(lines) else ""
+            shown += f"\n... showing lines {start}-{end} of {len(lines)}{more}"
         return shown
 
     @tool("Create or overwrite a file with the given content.", risk="write",
@@ -151,12 +196,17 @@ def core_tools(workdir):
                                   timeout=seconds)
         except subprocess.TimeoutExpired:
             return f"ERROR: timed out after {timeout}s"
-        output = (proc.stdout or "") + (proc.stderr or "")
+        parts = [proc.stdout.rstrip("\n")] if proc.stdout else []
+        if proc.stderr:
+            parts.append("[stderr]\n" + proc.stderr.rstrip("\n"))
+        output = "\n".join(parts)
         if len(output) > MAX_BASH_CHARS:
             half = MAX_BASH_CHARS // 2
             cut = len(output) - MAX_BASH_CHARS
             output = f"{output[:half]}\n... [{cut} chars truncated] ...\n{output[-half:]}"
-        return output or f"(exit {proc.returncode}, no output)"
+        if proc.returncode != 0:  # last, so it survives any head-and-tail cut
+            output = "\n".join(filter(None, [output, f"[exit code: {proc.returncode}]"]))
+        return output or "(no output)"
 
     @tool("List files whose relative path or basename matches a glob.", risk="read",
           pattern="Glob such as **/*.py or *.md (default **/*)")

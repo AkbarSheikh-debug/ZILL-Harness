@@ -22,7 +22,8 @@ Design rules:
   * Every tool call is decided by Policy.decide() with the Tool in hand (its
     risk and source), and recorded in the audit log when it finishes.
   * Before an allowed state-changing call runs: before-hooks, then a
-    checkpoint. After it runs: after-hooks. Reads trigger neither.
+    checkpoint. After it runs: after-hooks. Reads trigger neither. Every
+    result that ran, from any source, is then bounded by tools.bound_result.
   * A run is done when the model stops and the verify command passes; a
     failing check goes back to the model for up to MAX_FIX_ROUNDS rounds.
     Hook and verify commands are decided by Policy like bash calls.
@@ -40,7 +41,7 @@ from . import (__version__, audit, config, context, credentials, hooks, loop, me
 from .checkpoints import TOOL_PREFIX, Checkpoints
 from .security import Decision, Policy
 from .subagent import subagent_tool
-from .tools import Tool, core_tools, tool
+from .tools import Tool, bound_result, core_tools, tool
 
 COMPACT_AT = 0.6  # compact once the transcript fills this share of the window
 MAX_FIX_ROUNDS = 3
@@ -190,9 +191,9 @@ class Harness:
 
         def after_tool(call, result):
             _, _, decision = self._pending.get(call["id"], (None, None, None))
-            if decision is None or decision.risk == "read":
-                return result
-            return self._after_hooks(call, result)
+            if decision is not None and decision.risk != "read":
+                result = self._after_hooks(call, result)
+            return bound_result(self.workdir, call["name"], result)
 
         def before_turn(messages):
             self._flush()

@@ -164,6 +164,8 @@ flowchart TD
 - **Memory persists.** `ZILL.md` is loaded into every system prompt, and the
   `remember` tool appends to it. Once web, MCP or connector output has entered
   a task, any memory write needs your approval, so a page cannot plant a lasting instruction.
+- **Tool output is bounded, not lost.** A result over 12,000 characters keeps its head
+  and tail; the full text goes to `.zill/spill/` for the model to page through.
 - **A stuck model is stopped.** The same call with the same result three times
   draws a warning; five times ends the run with a summary instead of burning tokens.
 - **Skills shape behaviour.** A one-line catalog sits in the prompt, and

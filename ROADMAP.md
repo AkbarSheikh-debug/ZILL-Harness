@@ -325,6 +325,11 @@ spend fewer tokens, with plain files and no index or background process.
 - [x] **Tainted memory writes:** after network, MCP or connector output enters a task
       (sub-agents included), `remember` and writes to `ZILL.md` need approval in every mode.
 - [x] **Loop guard:** the same call with the same result warns at 3 repeats and stops at 5.
+- [x] **Bounded tool output:** every result over 12,000 characters, from any source, keeps its
+      head and tail; the full text is saved under `.zill/spill/` for `read_file` or `grep`.
+      `read_file` pages with `offset` and `limit`.
+- [x] **`bash` exit status:** stderr gets its own section, and a non-zero exit code is always
+      reported, even when the command printed output.
 - [ ] **Short-term notes:** `.zill/memory/YYYY-MM-DD.md`, never injected; the compaction
       summary also returns durable facts, appended there at no extra model call.
 - [ ] **Memory budget:** the injected `ZILL.md` is capped, with the size shown in `/context`.

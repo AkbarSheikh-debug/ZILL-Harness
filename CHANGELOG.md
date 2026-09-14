@@ -17,6 +17,18 @@ All notable changes to this project are documented here. The format follows
 - Loop guard: when the same tool call returns the same result 3 times within the
   last 12 calls, the model is warned; at 5 the run stops with a tool-less wrap-up
   and a `loop_detected` event.
+- Bounded tool output: a result over 12,000 characters from any tool (builtin, MCP,
+  plugin, connector or sub-agent) keeps its head and tail with a note, and the full text
+  is saved to `.zill/spill/<tool>-<hash>.txt`, where `read_file` and `grep` can reach it.
+  Spill files may hold untrusted web or MCP output and are not deleted automatically.
+- `read_file` takes `offset` and `limit`, so files longer than 4,000 lines can be paged.
+
+### Changed
+- `bash` puts stderr in a `[stderr]` section and ends with `[exit code: N]` whenever a
+  command fails, even if it printed output. Before, a failing command that printed
+  anything looked the same as a passing one.
+- `bash` and MCP results are no longer cut at 12,000 characters inside the tool; the
+  harness shortens them instead, so the middle is saved rather than lost.
 
 ## [1.0.0] - 2026-09-14
 
