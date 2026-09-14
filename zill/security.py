@@ -91,21 +91,26 @@ class Policy:
         self.approver = approver or _refuse
         self.dry_run = dry_run
 
-    def decide(self, call, tool=None):
-        """Classify call and return a Decision; in safe mode this may ask the approver."""
+    def decide(self, call, tool=None, ask_reason=None):
+        """Classify call and return a Decision; in safe mode this may ask the approver.
+
+        ask_reason makes a call that is not a read need approval in every mode,
+        yolo included, and is what the approver and a refusal say.
+        """
         name, risk = call["name"], classify(call, tool)
         if risk == "destructive":
             return Decision(False, DENIED, risk)
-        if risk == "read" or (self.mode == "yolo" and not self.dry_run):
+        if risk == "read" or (self.mode == "yolo" and not self.dry_run and not ask_reason):
             return Decision(True, None, risk)
         if self.dry_run:
             return Decision(False, f"dry-run mode: {name} ({risk}) was not run", risk)
         if self.mode == "read-only":
             return Decision(False, f"{name} is not allowed in read-only mode", risk)
-        reason = f"{name} ({risk}) changes state and needs approval in safe mode"
+        reason = ask_reason or f"{name} ({risk}) changes state and needs approval in safe mode"
         if self.approver(call, reason) is True:
             return Decision(True, None, risk, needs_approval=True)
-        return Decision(False, f"the user did not approve {name}", risk, needs_approval=True)
+        refusal = f"the user did not approve {name}" + (f": {ask_reason}" if ask_reason else "")
+        return Decision(False, refusal, risk, needs_approval=True)
 
     def check(self, call, tool=None):
         """Return None to allow call, or a reason string to block it."""

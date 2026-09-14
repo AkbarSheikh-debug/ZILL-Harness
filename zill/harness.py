@@ -26,6 +26,9 @@ Design rules:
   * A run is done when the model stops and the verify command passes; a
     failing check goes back to the model for up to MAX_FIX_ROUNDS rounds.
     Hook and verify commands are decided by Policy like bash calls.
+  * Untrusted content taints the run: once a network-risk call, or a tool from
+    an MCP server or connector, has run (here or in a sub-agent), every memory
+    write needs approval in any mode until the user's next task.
 """
 
 import os
@@ -43,6 +46,9 @@ COMPACT_AT = 0.6  # compact once the transcript fills this share of the window
 MAX_FIX_ROUNDS = 3
 VERIFY_FAILED = ("Verification failed: `{command}` exited {code}.\n{output}\n\n"
                  "Find and fix the cause, then finish with a short summary.")
+UNTRUSTED_SOURCES = ("mcp", "connector")
+TAINTED_MEMORY = ("this task has read untrusted content (web, MCP or connector output), "
+                  "so saving to project memory needs your explicit approval")
 
 
 def _ignore(kind, payload):
@@ -56,7 +62,7 @@ class Harness:
                  system_extra="", on_event=None, budget_tokens=None, max_turns=120,
                  session_path=None, enable_subagents=True, persist=True, verify=None,
                  hooks=None, checkpoints=True, allowed_tools=None, stream=False,
-                 extensions=True, _depth=0, _audit_label=None):
+                 extensions=True, _depth=0, _audit_label=None, _on_taint=None):
         self.workdir = os.path.realpath(workdir)
         os.makedirs(self.workdir, exist_ok=True)
         self.model = model or provider.default_model()
@@ -71,6 +77,8 @@ class Harness:
         self._recorded = 0  # messages[:_recorded] are already on disk
         self._audit_label = _audit_label
         self._pending = {}  # call id -> (call, tool, decision) awaiting tool_end
+        self.tainted = False  # untrusted content has run since the latest task
+        self._on_taint = _on_taint  # a sub-agent's taint also marks its parent
         # None means "from .zill/project.json"; "" or [] switch the feature off.
         project = (config.load_project(self.workdir) if verify is None or hooks is None
                    else {})
@@ -108,7 +116,8 @@ class Harness:
                                max_turns=max_turns, persist=False, verify="",
                                hooks=self.hooks, checkpoints=checkpoints,
                                allowed_tools=allowed_tools, extensions=loaded, _depth=depth,
-                               _audit_label=f"{self.audit_label()} (sub-agent)")
+                               _audit_label=f"{self.audit_label()} (sub-agent)",
+                               _on_taint=self._mark_tainted)
 
             spawn = subagent_tool(make_child, depth=_depth)
             self.tools[spawn.name] = spawn
@@ -143,6 +152,7 @@ class Harness:
             self.session_path = session.new_session(self.workdir, task[:32])
             session.write_meta(self.session_path, self.metadata())
         self.messages.append({"role": "user", "text": task})
+        self.tainted = False
         self._flush()
 
         def on_event(kind, payload):
@@ -155,6 +165,10 @@ class Harness:
             if kind == "tool_end":
                 call, tool_obj, decision = self._pending.pop(
                     payload["id"], ({"name": payload["name"], "args": {}}, None, None))
+                if decision and decision.allowed and (
+                        decision.risk == "network"
+                        or getattr(tool_obj, "source", None) in UNTRUSTED_SOURCES):
+                    self._mark_tainted()
                 audit.record(self.workdir, self.audit_label(), call, tool_obj, decision,
                              payload["result"], payload["seconds"])
             self.on_event(kind, payload)
@@ -162,7 +176,9 @@ class Harness:
         def before_tool(call):
             self._flush()
             tool_obj = self.tools.get(call["name"])
-            decision = self.policy.decide(call, tool_obj)
+            ask = (TAINTED_MEMORY if self.tainted and memory.writes_memory(self.workdir, call)
+                   else None)
+            decision = self.policy.decide(call, tool_obj, ask_reason=ask)
             if decision.allowed and decision.risk != "read":
                 refusal = self._before_hooks(call)
                 if refusal:
@@ -217,6 +233,12 @@ class Harness:
         finally:
             self._flush()
             self.on_event("session_end", {"session": self.session_path})
+
+    def _mark_tainted(self):
+        """Record that untrusted content ran, here and in every parent harness."""
+        self.tainted = True
+        if self._on_taint is not None:
+            self._on_taint()
 
     def _load_extensions(self):
         """Start trusted MCP servers and load enabled plugins; return their tools."""

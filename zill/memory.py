@@ -11,6 +11,10 @@ Design rules:
     the same prompt, so a fresh run starts exactly where the file says.
   * The prompt names the real platform and path, so commands and paths the
     model writes match the machine it is running on.
+  * Memory is re-read into every future prompt, so it is where an injected
+    instruction would persist. The harness therefore asks before any memory
+    write in a turn that has seen untrusted content; writes_memory() names
+    those writes. A shell command that edits the file is not caught.
 """
 
 import os
@@ -53,6 +57,18 @@ def build_system_prompt(workdir, extra=""):
     if extra:
         sections.append(extra)
     return "\n\n".join(sections)
+
+
+def writes_memory(workdir, call):
+    """True if call saves to the memory file: remember, or a file tool aimed at it."""
+    path = call["args"].get("path")
+    if call["name"] == "remember":
+        return True
+    if call["name"] not in ("write_file", "edit_file") or not isinstance(path, str):
+        return False
+    root = os.path.realpath(workdir)
+    target = os.path.realpath(os.path.join(root, path))
+    return os.path.normcase(target) == os.path.normcase(os.path.join(root, MEMORY_FILE))
 
 
 def remember(workdir, note):

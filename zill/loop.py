@@ -15,15 +15,30 @@ Design rules:
     gets one last call with no tools.
   * Every tool call carries an id and its result repeats it, so results pair
     with calls by id, never by position. Providers that send no id get one.
+  * A stuck model is stopped, not billed forever: when the same call returns
+    the same result REPEAT_WARN times among the last REPEAT_WINDOW calls, the
+    result carries a warning; at REPEAT_STOP the loop ends the way the turn
+    limit does. Blocked calls count too.
   * Events are plain dicts and consumers may ignore any kind: provider_start,
     text_delta (when streaming), provider_end, assistant, tool_start,
-    tool_blocked, tool_end.
+    tool_blocked, loop_detected, tool_end.
 """
 
+import json
 import time
 import uuid
+from collections import deque
 
 from . import provider
+
+REPEAT_WINDOW = 12
+REPEAT_WARN = 3
+REPEAT_STOP = 5
+REPEAT_NOTE = ("\n\n[ZILL: this exact call has returned this exact result {count} times. "
+               "Repeating it will not help; change your approach.]")
+TURN_LIMIT = "Turn limit reached; wrap up now."
+STUCK = ("Stopped: {name} kept returning the same result. Summarise what you tried "
+         "and what is blocking you, then stop.")
 
 
 def run_loop(model, system, messages, tools, on_event, before_tool,
@@ -37,6 +52,7 @@ def run_loop(model, system, messages, tools, on_event, before_tool,
     and the assistant event is marked streamed.
     """
     specs = [t.spec for t in tools.values()]
+    recent, stuck = deque(maxlen=REPEAT_WINDOW), None
     for _ in range(max_turns):
         if before_turn is not None:
             # Replace contents, not the binding, so the caller's list stays live.
@@ -56,13 +72,29 @@ def run_loop(model, system, messages, tools, on_event, before_tool,
                 result = _execute(call, tools)
                 if after_tool is not None:
                     result = after_tool(call, result)
+            recent.append(_signature(call, result))
+            repeats = recent.count(recent[-1])
+            if repeats >= REPEAT_WARN:
+                result += REPEAT_NOTE.format(count=repeats)
+                on_event("loop_detected", {"id": call["id"], "name": call["name"],
+                                           "count": repeats, "stopped": repeats >= REPEAT_STOP})
+                if repeats >= REPEAT_STOP:
+                    stuck = call["name"]
             on_event("tool_end", {"id": call["id"], "name": call["name"], "result": result,
                                   "seconds": round(time.monotonic() - started, 3)})
             messages.append({"role": "tool", "id": call["id"], "name": call["name"],
                              "text": result})
+        if stuck is not None:  # every call in the reply already has its result
+            break
 
-    messages.append({"role": "user", "text": "Turn limit reached; wrap up now."})
+    note = STUCK.format(name=stuck) if stuck else TURN_LIMIT
+    messages.append({"role": "user", "text": note})
     return _call_model(model, system, messages, [], on_event, stream)["text"]
+
+
+def _signature(call, result):
+    """Identify a call by its name, arguments and result, for spotting repeats."""
+    return hash((call["name"], json.dumps(call["args"], sort_keys=True, default=str), result))
 
 
 def _call_model(model, system, messages, specs, on_event, stream=False):

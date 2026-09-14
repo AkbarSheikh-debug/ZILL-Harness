@@ -90,6 +90,9 @@ def print_event(kind, payload):
     elif kind == "tool_end":
         first = credentials.redact((payload["result"].splitlines() or [""])[0])
         print(_dim(f"   {_clip(first, RESULT_CLIP)}"))
+    elif kind == "loop_detected":
+        action = "stopping" if payload["stopped"] else "warned the model"
+        print(_dim(f"loop: {payload['name']} repeated {payload['count']}x, {action}"))
     elif kind == "todo":
         print(_dim(credentials.redact(payload["items"])))
     elif kind == "verify":
@@ -100,6 +103,8 @@ def print_event(kind, payload):
 
 def ask_approval(call, reason):
     """Policy approver: show the call and return True only on an explicit yes."""
+    if "untrusted" in reason:  # an unusual request says why; routine ones stay terse
+        print(_dim(f"   {reason}"))
     try:
         answer = input(f"approve {_describe(call)}? [y/N] ")
     except EOFError:

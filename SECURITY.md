@@ -31,6 +31,7 @@ where its safety boundary is:
 | Keys never printed by `doctor`, `inspect`, `--json`, or streamed output (redacted a line at a time) | Yes, for known key values |
 | Checkpoints before every change, restorable with `zill undo` | Yes, if git is installed. Only changes inside the workdir are captured, and ignored files are not. |
 | **`bash` sandboxed to the workdir** | **No.** A shell command can read or write anywhere your user account can. |
+| After web, network-command, MCP or connector output enters a task (sub-agents included), saving to `ZILL.md` through `remember`, `write_file` or `edit_file` needs your approval in every mode, `yolo` too, and is refused when no one can approve. The gate lifts at your next task. | Yes, but a `bash` command that edits `ZILL.md`, or a local file the agent reads, is not caught |
 | Protection from prompt injection in files or web content the agent reads | No |
 
 **Recommendations**

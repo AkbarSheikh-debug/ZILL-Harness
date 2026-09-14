@@ -162,7 +162,10 @@ flowchart TD
 - **Context is compacted.** Near 60% of the model's window, older turns are
   summarised, the recent tail is kept word for word, and the todo list is carried over.
 - **Memory persists.** `ZILL.md` is loaded into every system prompt, and the
-  `remember` tool appends to it.
+  `remember` tool appends to it. Once web, MCP or connector output has entered
+  a task, any memory write needs your approval, so a page cannot plant a lasting instruction.
+- **A stuck model is stopped.** The same call with the same result three times
+  draws a warning; five times ends the run with a summary instead of burning tokens.
 - **Skills shape behaviour.** A one-line catalog sits in the prompt, and
   `use_skill` loads the full `SKILL.md` only when it's needed.
 - **Sub-agents work in isolation.** `spawn_agent` runs a child with a clean

@@ -317,6 +317,28 @@ the same budgets: standard library only, and no full-screen UI.
 **Acceptance:** each command is covered in `tests/test_terminal.py` with no key and no
 network, and the core stays under 3,500 lines.
 
+### v1.2: Memory and context
+
+The goal is memory that stays useful and safe over many sessions, and long runs that
+spend fewer tokens, with plain files and no index or background process.
+
+- [x] **Tainted memory writes:** after network, MCP or connector output enters a task
+      (sub-agents included), `remember` and writes to `ZILL.md` need approval in every mode.
+- [x] **Loop guard:** the same call with the same result warns at 3 repeats and stops at 5.
+- [ ] **Short-term notes:** `.zill/memory/YYYY-MM-DD.md`, never injected; the compaction
+      summary also returns durable facts, appended there at no extra model call.
+- [ ] **Memory budget:** the injected `ZILL.md` is capped, with the size shown in `/context`.
+- [ ] **User memory:** `~/.zill/USER.md` preferences as dated directives that replace, never
+      contradict, older ones; `remember` gains a user scope.
+- [ ] **`~/.zill/SOUL.md`:** optional voice and tone, loaded after the safety rules, never
+      from a project.
+- [ ] **Tool-result trimming:** old oversized results cut to head and tail before compaction.
+- [ ] **Overflow recovery:** a context-length error compacts and retries once.
+- [ ] **`/compact <focus>`**, with exact paths, identifiers and errors kept in summaries.
+
+**Acceptance:** scenario tests show a web page unable to write memory without approval,
+a looping model stopped, and facts surviving compaction into the day's notes.
+
 ---
 
 ## 6. Later (after v1.0, only if the design stays simple)

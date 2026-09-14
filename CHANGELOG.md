@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+- Memory writes after untrusted content: once a network-risk call (`web_fetch`,
+  `web_search`, `curl` and the like) or an MCP or connector tool has run in a task, or
+  in one of its sub-agents, `remember` and file writes to `ZILL.md` need explicit
+  approval in every mode, including `yolo`. With no one to ask they are blocked. The
+  gate lifts when the user gives the next task.
+
+### Added
+- Loop guard: when the same tool call returns the same result 3 times within the
+  last 12 calls, the model is warned; at 5 the run stops with a tool-less wrap-up
+  and a `loop_detected` event.
+
 ## [1.0.0] - 2026-09-14
 
 The first stable release: a concise, dependency-free coding-agent harness that
