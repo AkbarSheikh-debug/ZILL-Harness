@@ -14,7 +14,8 @@ has() { command -v "$1" >/dev/null 2>&1; }
 
 find_python() {
     for py in python3 python; do
-        if has "$py" && "$py" -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; then
+        # ssl too: ZILL needs HTTPS, and a Python run outside its conda environment may lack it.
+        if has "$py" && "$py" -c 'import sys, ssl; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; then
             echo "$py"; return 0
         fi
     done
@@ -22,11 +23,12 @@ find_python() {
 }
 
 uv_install() {  # uv_install [--python X]: ZILL with the app, or without it if the app fails
-    if [ -n "$UI_SOURCE" ] && uv tool install --force "$@" "$SOURCE" --with "$UI_SOURCE"; then
+    # uv's own Python, not whatever is on PATH (a conda base Python can break HTTPS).
+    if [ -n "$UI_SOURCE" ] && uv tool install --force --managed-python "$@" "$SOURCE" --with "$UI_SOURCE"; then
         return 0
     fi
     [ -z "$UI_SOURCE" ] || say "$NO_UI"
-    uv tool install --force "$@" "$SOURCE"
+    uv tool install --force --managed-python "$@" "$SOURCE"
 }
 
 pip_install() {  # pip_install PY: ZILL with the app, or without it if the app fails

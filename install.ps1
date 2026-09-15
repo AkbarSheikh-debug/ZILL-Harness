@@ -16,7 +16,8 @@ function Run { & $args[0] $args[1..($args.Length - 1)]; if ($LASTEXITCODE) { thr
 function Find-Python {
     foreach ($py in @('py', 'python', 'python3')) {
         if (Has $py) {
-            & $py -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>$null
+            # ssl too: a conda Python run outside its environment cannot load it, and ZILL needs HTTPS.
+            & $py -c 'import sys, ssl; sys.exit(sys.version_info < (3, 10))' 2>$null
             if ($LASTEXITCODE -eq 0) { return $py }
         }
     }
@@ -32,13 +33,14 @@ function Add-UserPath($dir) {
 }
 
 # ZILL with the app when it installs, else ZILL alone. $extra holds uv's --python flag, if any.
+# uv's own Python, not whatever is on PATH (an Anaconda base Python breaks HTTPS).
 function Install-Uv($extra) {
     if ($uiSource) {
-        & uv tool install --force @extra $source --with $uiSource
+        & uv tool install --force --managed-python @extra $source --with $uiSource
         if ($LASTEXITCODE -eq 0) { return }
         Say $noUi
     }
-    Run uv tool install --force @extra $source
+    Run uv tool install --force --managed-python @extra $source
 }
 
 $py = Find-Python
