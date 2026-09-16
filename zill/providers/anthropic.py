@@ -14,6 +14,8 @@ Design rules:
     automatic caching, so each turn re-reads the growing history from cache.
   * Each model's default thinking is kept, and no sampling parameters are
     sent, since current models reject them.
+  * An effort goes out as output_config.effort. Models without the control get
+    none, and a level a model lacks steps down to the nearest one it has.
 """
 
 import json
@@ -28,6 +30,11 @@ MAX_TOKENS = 16000  # non-streaming requests stay well under HTTP timeouts
 WINDOWS = {"claude-haiku-4-5": 200_000}  # every other current model: 1M
 CACHE = {"type": "ephemeral"}
 REFUSED = "(The model declined this request.)"
+NO_EFFORT = ("claude-3", "claude-haiku", "claude-sonnet-4-5", "claude-sonnet-4-2",
+             "claude-opus-4-1", "claude-opus-4-2")  # these reject output_config.effort
+# model prefix: the levels it lacks, and what each steps down to
+STEP_DOWN = {"claude-opus-4-5": {"xhigh": "high", "max": "high"},
+             "claude-opus-4-6": {"xhigh": "high"}, "claude-sonnet-4-6": {"xhigh": "high"}}
 
 
 def auth_headers(key):
@@ -99,7 +106,17 @@ def _collect_stream(events, on_text):
             "usage": usage}
 
 
-def complete(model, system, messages, tools, base, key, on_text=None):
+def effort_for(model, effort):
+    """Return the output_config effort model accepts for effort, or None to send none."""
+    if not effort or model.startswith(NO_EFFORT):
+        return None
+    for prefix, lower in STEP_DOWN.items():
+        if model.startswith(prefix):
+            return lower.get(effort, effort)
+    return effort
+
+
+def complete(model, system, messages, tools, base, key, on_text=None, effort=None):
     """Send one conversation to Claude and return its neutral reply.
 
     With on_text, the reply is streamed, text fragments go to on_text as
@@ -108,6 +125,9 @@ def complete(model, system, messages, tools, base, key, on_text=None):
     body = {"model": model, "max_tokens": MAX_TOKENS, "cache_control": CACHE,
             "system": [{"type": "text", "text": system, "cache_control": CACHE}],
             "messages": _to_wire(messages)}
+    level = effort_for(model, effort)
+    if level:
+        body["output_config"] = {"effort": level}
     if tools:
         body["tools"] = [{"name": s["name"], "description": s["description"],
                           "input_schema": s["parameters"]}

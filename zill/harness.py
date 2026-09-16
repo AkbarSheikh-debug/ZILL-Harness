@@ -20,7 +20,9 @@ Design rules:
     parent's Policy object and asker, so dry-run, plan mode and approvals bind
     them too, and they write to the parent's audit log under its session name.
   * Every tool call is decided by Policy.decide() with the Tool in hand (its
-    risk and source), and recorded in the audit log when it finishes.
+    risk and source), and recorded in the audit log when it finishes. In auto
+    mode the policy's reviewer is this harness: autoreview judges the call
+    against the person's latest message, and its tokens count toward usage.
   * Before an allowed state-changing call runs: before-hooks, then a
     checkpoint. After it runs: after-hooks. Reads trigger neither. Every
     result that ran, from any source, is then bounded by tools.bound_result and
@@ -46,8 +48,8 @@ import threading
 import time
 import uuid
 
-from . import (__version__, audit, config, context, credentials, goal, history, hooks,
-               interact, loop, memory, provider, session, skills, todo, web)
+from . import (__version__, audit, autoreview, config, context, credentials, goal, history,
+               hooks, interact, loop, memory, provider, session, skills, todo, web)
 from .checkpoints import TOOL_PREFIX, Checkpoints
 from .codenav import code_nav_tool
 from .jobs import Processes, process_tools
@@ -81,12 +83,16 @@ class Harness:
                  system_extra="", on_event=None, budget_tokens=None, max_turns=120,
                  session_path=None, enable_subagents=True, persist=True, verify=None,
                  hooks=None, checkpoints=True, allowed_tools=None, stream=False,
-                 extensions=True, asker=None, _depth=0, _audit_label=None, _on_taint=None,
-                 _parent_stopped=None):
+                 extensions=True, asker=None, effort=None, _depth=0, _audit_label=None,
+                 _on_taint=None, _parent_stopped=None):
         self.workdir = os.path.realpath(workdir)
         os.makedirs(self.workdir, exist_ok=True)
         self.model = model or provider.default_model()
         self.policy = policy or Policy("yolo")
+        if self.policy.reviewer is None:  # children share the parent's policy and reviewer
+            self.policy.reviewer = self._review
+        self.effort = None
+        self.set_effort(effort)
         self.on_event = on_event or _ignore
         self.asker = asker  # answers ask_user_question and plan reviews; None when headless
         window = provider.model_info(self.model).get("context_window", 1_000_000)
@@ -146,7 +152,7 @@ class Harness:
                                max_turns=max_turns, persist=False, verify="",
                                hooks=self.hooks, checkpoints=checkpoints,
                                allowed_tools=allowed_tools, extensions=loaded, asker=self.asker,
-                               _depth=depth, _audit_label=f"{self.audit_label()} (sub-agent)",
+                               effort=self.effort, _depth=depth, _audit_label=f"{self.audit_label()} (sub-agent)",
                                _on_taint=self._mark_tainted, _parent_stopped=self.stopped)
 
             self.agents = Agents(make_child, depth=_depth)
@@ -243,7 +249,7 @@ class Harness:
             return loop.run_loop(self.model, system, self.messages, self.tools,
                                  on_event, before_tool, max_turns=self.max_turns,
                                  before_turn=before_turn, after_tool=after_tool,
-                                 stream=self.stream)
+                                 stream=self.stream, effort=self.effort)
 
         self.on_event("session_start", {"session": self.session_path, "model": self.model})
         try:
@@ -400,6 +406,25 @@ class Harness:
                                  * COMPACT_AT)
         self.last_input = 0  # the old provider's count says nothing about the new one
 
+    def set_effort(self, effort):
+        """Set how hard the model thinks on later calls: one of provider.EFFORTS, or None."""
+        if effort not in (None, *provider.EFFORTS):
+            raise ValueError(f"effort must be one of {', '.join(provider.EFFORTS)}")
+        self.effort = effort
+
+    def _review(self, call, risk):
+        """Policy reviewer for auto mode: return None when call looks safe, else a concern."""
+        request = next((m["text"] for m in reversed(self.messages)
+                        if m["role"] == "user" and not m.get("auto")), "")
+        concern, usage = autoreview.review(self.model, request, self.workdir, call, risk)
+        with self._lock:
+            self.usage["calls"] += 1 if usage else 0
+            for field in ("input", "output"):
+                self.usage[field] += usage.get(field, 0)
+        self.on_event("auto_review", {"id": call.get("id"), "name": call["name"],
+                                      "risk": risk, "concern": concern})
+        return concern
+
     def context_usage(self):
         """Estimate what the next request holds, by part, against the model's window."""
         system = len(self.system) // context.CHARS_PER_TOKEN
@@ -442,7 +467,7 @@ class Harness:
         return {"started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "zill_version": __version__, "model": self.model,
                 "model_info": provider.model_info(self.model), "workdir": self.workdir,
-                "mode": self.policy.mode, "dry_run": self.policy.dry_run,
+                "mode": self.policy.mode, "dry_run": self.policy.dry_run, "effort": self.effort,
                 "tools": {name: {"source": t.source, "risk": t.risk}
                           for name, t in sorted(self.tools.items())},
                 "skills": sorted(skills.catalog(self.workdir)),

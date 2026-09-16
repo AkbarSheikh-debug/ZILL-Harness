@@ -78,7 +78,8 @@ zill run "summarise the open TODOs" --json         # one JSON object, for script
 |---|---|
 | `-d, --workdir` | Directory the agent works in (default `.`). |
 | `-m, --model` | `provider:model`, see Providers. |
-| `--mode` | `safe` (asks before changes), `yolo` (no questions) or `read-only`. Default: `safe` interactively, `yolo` headless. |
+| `--mode` | See Modes below. Default: `safe` interactively, `yolo` headless. |
+| `--effort` | How hard the model thinks: `low`, `medium`, `high`, `xhigh` or `max`. Default: config, else the model's own. |
 | `--profile` | `coding` (default), `reviewer` and `research` (read-only), or `writing` (no shell). |
 | `--dry-run` | Plan and inspect only: every call that is not a read is blocked. |
 | `--plan` | Plan mode: the agent reads, then asks you to approve a plan before changing anything. |
@@ -87,10 +88,29 @@ zill run "summarise the open TODOs" --json         # one JSON object, for script
 | `--json` | Headless: print one JSON object with the result, usage and cost. |
 | `--resume` | Load the newest session in the workdir first. |
 
-In interactive mode, type `/help` for `/cost /context /model /mode /compact /clear
-/plan /goal /retry /branch /jobs /kill /search /feedback /todo /undo /checkpoints
-/sessions /skills /exit`. Replies stream as they are written. When the agent asks
-a question or proposes a plan, answer it at the prompt.
+In interactive mode, type `/help` for `/cost /context /model /mode /effort /compact
+/clear /plan /goal /retry /branch /jobs /kill /search /feedback /todo /undo
+/checkpoints /sessions /skills /exit`. Replies stream as they are written. When the
+agent asks a question or proposes a plan, answer it at the prompt.
+
+### Modes
+
+| Mode | What runs without asking | In the app |
+|---|---|---|
+| `read-only` | Reads. Everything else is refused. | Read-only |
+| `safe` | Reads. Every change asks you first. | Manual |
+| `edits` | Reads, and ZILL's own file edits inside the workdir (checkpointed, so `/undo` takes them back). Commands, network calls and MCP or plugin tools ask. | Edit automatically |
+| `auto` | Reads and file edits. Every other change goes to a quick safety check: the model, at low effort and with no tools, sees your request and the call, never tool output. Calls it clears run; anything else, or a failed check, asks you. | Auto |
+| `yolo` | Everything except destructive commands. | Bypass permissions |
+
+Plan mode (`--plan`, `/plan on`) sits on top of any mode: reads only until you
+approve a plan. Destructive commands are denied in every mode. `auto` is a second
+opinion, not a sandbox.
+
+**Effort** maps to each provider's own reasoning control: `output_config.effort`
+for Claude, `reasoning_effort` for OpenAI reasoning models, `thinkingLevel` for
+Gemini 3. Levels a model lacks step down to the nearest one it has, and models
+with no such control get nothing.
 
 ### Or use the app
 
@@ -149,9 +169,9 @@ another endpoint.
 ### Configure it
 
 - **`~/.zill/config.json`** holds your defaults: `model`, `mode`, `profile`,
-  and `prices` in USD per million tokens, for models without built-in prices.
+  `effort`, and `prices` in USD per million tokens, for models without built-in prices.
 - **`.zill/project.json`** holds per-project settings: `model`, `mode`,
-  `profile`, `verify`, `hooks`.
+  `profile`, `effort`, `verify`, `hooks`.
 
 ```json
 {
@@ -195,7 +215,8 @@ flowchart TD
   same `Tool` objects with a `source` and a `risk`.
 - **A tool is approved.** Before any call, `Policy.decide()` classifies its risk
   (`bash` by what the command does). It denies destructive calls in every mode,
-  applies dry-run and read-only, and in safe mode asks you.
+  applies dry-run and read-only, runs file edits in `edits` and `auto`, sends other
+  changes to the safety check in `auto`, and otherwise asks you.
 - **A tool runs, or fails.** Before-hooks and a checkpoint run first, then the
   tool, then after-hooks. Exceptions and refusals become `ERROR: ...` or
   `BLOCKED: ...` results that the model reads. The loop never crashes because a
@@ -357,7 +378,7 @@ python evals/run.py --list                          # coding, web, security, mem
 
 ## Contributing
 
-ZILL stays small on purpose: zero runtime dependencies, a 4,500-line core, and
+ZILL stays small on purpose: zero runtime dependencies, a 4,700-line core, and
 1,500 lines for edge packages, all enforced in CI. Fork it, branch, and send a
 pull request. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and
 [ROADMAP.md](ROADMAP.md).

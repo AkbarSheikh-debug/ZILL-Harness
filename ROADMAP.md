@@ -37,7 +37,7 @@ large work.
 |---|---|
 | Runtime dependencies | **Zero.** Standard library only. |
 | Python | 3.10+ |
-| Core, `zill/*.py` | **≤ 4,500 lines** (raised from 3,500 for the workbench tools) |
+| Core, `zill/*.py` | **≤ 4,700 lines** (raised from 4,500 for auto/edits modes and effort) |
 | Edge packages (`zill/mcp/`, `zill/plugins/`) | **≤ 1,500 lines** |
 | The app, [ZILL-UI](https://github.com/AkbarSheikh-debug/ZILL-UI) `zill_ui/*.py` | **≤ 1,500 lines**, in its own repository |
 | Tests, examples, evals | Not counted, but kept readable |
@@ -316,7 +316,7 @@ the same budgets: standard library only, and no full-screen UI.
 - [ ] **`@path` mentions:** attach a file's contents to the prompt.
 
 **Acceptance:** each command is covered in `tests/test_terminal.py` with no key and no
-network, and the core stays under 3,500 lines.
+network, and the core stays under the budget in §2.
 
 ### v1.2: Memory and context
 

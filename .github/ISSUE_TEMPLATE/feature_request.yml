@@ -20,7 +20,7 @@ body:
     id: size
     attributes:
       label: Size estimate
-      description: Roughly how many lines does it add? Does it need any dependency? (The core must stay dependency-free and under 3,500 lines.)
+      description: Roughly how many lines does it add? Does it need any dependency? (The core must stay dependency-free and under 4,700 lines.)
   - type: checkboxes
     id: contribute
     attributes:

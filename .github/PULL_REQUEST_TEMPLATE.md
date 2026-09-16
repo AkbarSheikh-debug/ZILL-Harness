@@ -12,7 +12,7 @@
 
 - [ ] One focused change, branched from `main`
 - [ ] No new runtime dependencies
-- [ ] Core stays under 3,500 lines (`zill/*.py`)
+- [ ] Core stays under 4,700 lines (`zill/*.py`)
 - [ ] New or changed modules keep their concept/design-rules docstring
 - [ ] README, ROADMAP, or CHANGELOG updated if behavior changed
 - [ ] No API keys, session files, or personal data committed

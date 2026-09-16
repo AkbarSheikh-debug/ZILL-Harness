@@ -1,9 +1,9 @@
 """Config: user defaults and project settings, validated before anything runs.
 
 Concept: two optional JSON files shape a run. ~/.zill/config.json holds the
-user's defaults (model, mode, profile, prices). .zill/project.json in the
-working directory holds what a project needs: its verify command, hooks,
-and the model, mode or profile it prefers. ZILL works the same without them.
+user's defaults (model, mode, profile, effort, prices). .zill/project.json in
+the working directory holds what a project needs: its verify command, hooks,
+and the model, mode, profile or effort it prefers. ZILL works the same without them.
 
 Design rules:
   * JSON, parsed with the standard library. Every problem is a clear error
@@ -19,12 +19,13 @@ import os
 
 from . import credentials
 from .profiles import PROFILES
+from .provider import EFFORTS
 from .security import MODES
 
 PROJECT_FILE = ".zill/project.json"
 USER_FILE = "config.json"
 HOOK_KEYS = {"when", "tool", "match", "run"}
-SHARED_KEYS = {"model", "mode", "profile"}
+SHARED_KEYS = {"model", "mode", "profile", "effort"}
 
 
 def user_path():
@@ -95,7 +96,9 @@ def _check_keys(path, data, allowed):
 
 
 def _check_shared(path, data):
-    """Validate the model, mode and profile fields both files may set."""
+    """Validate the model, mode, profile and effort fields both files may set."""
+    if "effort" in data and data["effort"] not in EFFORTS:
+        raise RuntimeError(f"{path}: \"effort\" must be one of {', '.join(EFFORTS)}")
     if "model" in data and not (isinstance(data["model"], str) and data["model"].strip()):
         raise RuntimeError(f"{path}: \"model\" must be a non-empty string")
     if "mode" in data and data["mode"] not in MODES:

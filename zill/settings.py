@@ -12,6 +12,8 @@ Design rules:
   * mode: a flag wins outright. Otherwise the user's default (or safe for a
     person, yolo headless) applies, and the project file and the profile may
     only make it stricter, never looser.
+  * effort: flag, then the project file, then the user file, else None (each
+    model's own default). Effort changes cost, not trust, so any source may set it.
 """
 
 import os
@@ -19,13 +21,13 @@ import os
 from . import config, provider
 from .harness import Harness
 from .profiles import PROFILES
-from .security import Policy
+from .security import MODES, Policy
 
-STRICTNESS = {"read-only": 0, "safe": 1, "yolo": 2}
+STRICTNESS = {mode: rank for rank, mode in enumerate(MODES)}  # MODES lists strictest first
 
 
-def resolve(workdir=".", model=None, mode=None, profile=None, headless=False):
-    """Return {"model", "mode", "profile", "project", "user", "notes"} for a run in workdir."""
+def resolve(workdir=".", model=None, mode=None, profile=None, headless=False, effort=None):
+    """Return {"model", "mode", "effort", "profile", "project", "user", "notes"} for workdir."""
     workdir = os.path.realpath(workdir)
     user, project = config.load_user(), config.load_project(workdir)
     notes = []
@@ -41,8 +43,9 @@ def resolve(workdir=".", model=None, mode=None, profile=None, headless=False):
             elif stricter and STRICTNESS[stricter] > STRICTNESS[mode]:
                 notes.append(f"{source} asks for {stricter} mode; ignored, it may only "
                              f"tighten ({mode})")
-    return {"workdir": workdir, "model": model, "mode": mode, "profile": profile,
-            "project": project, "user": user, "notes": notes}
+    effort = effort or project.get("effort") or user.get("effort")
+    return {"workdir": workdir, "model": model, "mode": mode, "effort": effort,
+            "profile": profile, "project": project, "user": user, "notes": notes}
 
 
 def make_harness(settings, approver=None, dry_run=False, plan=False, **kwargs):
@@ -52,6 +55,7 @@ def make_harness(settings, approver=None, dry_run=False, plan=False, **kwargs):
         raise RuntimeError(f"{problem}. Run `zill setup`, or pass -m provider:model.")
     profile = PROFILES[settings["profile"]]
     kwargs.setdefault("system_extra", profile["prompt"])
+    kwargs.setdefault("effort", settings.get("effort"))
     policy = Policy(settings["mode"], approver=approver, dry_run=dry_run, plan=plan)
     return Harness(settings["workdir"], model=settings["model"], policy=policy,
                    allowed_tools=profile["tools"], **kwargs)

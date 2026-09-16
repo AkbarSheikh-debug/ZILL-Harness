@@ -23,6 +23,15 @@ All notable changes to this project are documented here. The format follows
   gate lifts when the user gives the next task.
 
 ### Added
+- Two modes between `safe` and `yolo`. `edits` runs ZILL's own file edits inside the
+  workdir without asking and asks for everything else. `auto` also runs other changes
+  that a low-effort model safety check clears; the check sees the request and the call,
+  never tool output, and anything it does not clear (or a failed check) asks. A project
+  file may still only tighten the mode.
+- Effort: `--effort`, `/effort` and an `effort` config key (`low`, `medium`, `high`,
+  `xhigh`, `max`), sent as Claude's `output_config.effort`, OpenAI's `reasoning_effort`
+  or Gemini 3's `thinkingLevel`, and never to models without such a control.
+  `zill.UI_API` is now 2. The core line budget is raised again, to 4,700, to hold it.
 - `zill ui` opens the browser app from the separate
   [ZILL-UI](https://github.com/AkbarSheikh-debug/ZILL-UI) package. The `ui` extra
   (`pip install "zill-harness[ui]"`) and the one-line installers add it; without it,

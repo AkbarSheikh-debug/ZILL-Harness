@@ -42,14 +42,15 @@ STUCK = ("Stopped: {name} kept returning the same result. Summarise what you tri
 
 
 def run_loop(model, system, messages, tools, on_event, before_tool,
-             max_turns=80, before_turn=None, after_tool=None, stream=False):
+             max_turns=80, before_turn=None, after_tool=None, stream=False, effort=None):
     """Drive the model until it answers without tool calls; return that text.
 
     tools maps name -> Tool (with .spec and .run). on_event(kind, payload)
     reports progress. before_tool(call) returns None to allow a call or a
     reason string to block it. after_tool(call, result) may extend the
     result of a call that ran. With stream, text arrives as text_delta events
-    and the assistant event is marked streamed.
+    and the assistant event is marked streamed. effort, when set, goes to every
+    model call.
     """
     specs = [t.spec for t in tools.values()]
     recent, stuck = deque(maxlen=REPEAT_WINDOW), None
@@ -57,7 +58,7 @@ def run_loop(model, system, messages, tools, on_event, before_tool,
         if before_turn is not None:
             # Replace contents, not the binding, so the caller's list stays live.
             messages[:] = before_turn(messages)
-        reply = _call_model(model, system, messages, specs, on_event, stream)
+        reply = _call_model(model, system, messages, specs, on_event, stream, effort)
         if not reply["tool_calls"]:
             return reply["text"]
         for call in reply["tool_calls"]:
@@ -89,7 +90,7 @@ def run_loop(model, system, messages, tools, on_event, before_tool,
 
     note = STUCK.format(name=stuck) if stuck else TURN_LIMIT
     messages.append({"role": "user", "text": note, "auto": "limit"})
-    return _call_model(model, system, messages, [], on_event, stream)["text"]
+    return _call_model(model, system, messages, [], on_event, stream, effort)["text"]
 
 
 def _signature(call, result):
@@ -97,11 +98,12 @@ def _signature(call, result):
     return hash((call["name"], json.dumps(call["args"], sort_keys=True, default=str), result))
 
 
-def _call_model(model, system, messages, specs, on_event, stream=False):
+def _call_model(model, system, messages, specs, on_event, stream=False, effort=None):
     """Make one model call, record the assistant message, and return the reply."""
     on_event("provider_start", {"model": model, "messages": len(messages)})
     on_text = (lambda chunk: on_event("text_delta", {"text": chunk})) if stream else None
-    reply = provider.complete(model, system, messages, specs, on_text=on_text)
+    extra = {"effort": effort} if effort else {}  # unset stays the model's own default
+    reply = provider.complete(model, system, messages, specs, on_text=on_text, **extra)
     reply["streamed"] = stream
     on_event("provider_end", {"model": model, "usage": reply.get("usage") or {}})
     for call in reply["tool_calls"]:
