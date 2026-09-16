@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- The session file could record a message twice when another thread (an app built on
+  the harness, reading the transcript) flushed concurrently with the worker thread
+  mid-run. Writes to the session file now take a lock.
+
 ### Security
 - Tool results are redacted before the model sees them, not only on screen. A real
   Flash eval showed a model echoing an API key it read from `bash` output; now it
