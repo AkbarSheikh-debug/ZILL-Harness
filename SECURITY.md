@@ -24,6 +24,8 @@ where its safety boundary is:
 | Deny patterns for catastrophic shell commands (`sudo`, `rm -rf /`, `mkfs`, `curl \| sh`, force push, and more) | Yes, but only as a tripwire |
 | `safe` mode: every state-changing call needs your approval | Yes |
 | `read-only` mode and `--dry-run`: no state-changing calls at all, sub-agents included | Yes |
+| `edits` mode: only ZILL's builtin file tools (jailed to the workdir, checkpointed) run unasked; commands, network calls and MCP or plugin tools still need approval | Yes |
+| `auto` mode: file edits run unasked; every other state-changing call runs only if a model safety check, shown your request and the call but never tool output, calls it safe. Anything else, or a failed check, needs your approval (refused when no one can approve) | Yes, but the check is a model's judgement: a second opinion, not a boundary |
 | Risk classification per call (`read`, `write`, `execute`, `network`, `destructive`), with destructive denied in every mode | Yes, but heuristic for `bash` |
 | Audit log of every tool call and policy decision, secrets redacted (`.zill/audit.jsonl`) | Yes |
 | Commands from `.zill/project.json` (verify, hooks) decided by the same policy as `bash`, never trusted automatically | Yes |
@@ -37,6 +39,7 @@ where its safety boundary is:
 **Recommendations**
 
 - Use `safe` mode (the interactive default) on any machine or repo you care about.
+  `edits` is a small step from it; `auto` trusts a model to judge your commands.
 - Only run `yolo` mode (the default with `-p`) in a disposable directory,
   container, or VM.
 - Keep API keys in environment variables or `zill setup`, which stores them in

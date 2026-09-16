@@ -11,15 +11,20 @@ Design rules:
   * No max_tokens or temperature: servers disagree on those parameter names,
     so each server's own defaults apply.
   * The key is optional, because local servers do not need one.
+  * An effort goes out as reasoning_effort, only to reasoning models by name
+    (gpt-5, o-series, also behind a router's vendor/ prefix): other servers may
+    reject the field. xhigh and max step down to high.
 """
 
 import json
+import re
 
 from .http import post_json, post_sse
 
 MODEL_INFO = {"supports_tools": True, "supports_parallel_tools": True,
               "supports_thought_signatures": False, "context_window": 128_000,
               "max_output_tokens": 16_000}  # conservative: servers vary widely
+REASONING = re.compile(r"(?:^|/)(?:gpt-5|o\d)")
 
 
 def auth_headers(key):
@@ -84,13 +89,15 @@ def _collect_stream(chunks, on_text):
     return {"choices": [{"message": message}], "usage": usage}
 
 
-def complete(model, system, messages, tools, base, key, on_text=None):
+def complete(model, system, messages, tools, base, key, on_text=None, effort=None):
     """Send one conversation to an OpenAI-compatible server and return its reply.
 
     With on_text, the reply is streamed and text fragments go to on_text.
     """
     body = {"model": model,
             "messages": [{"role": "system", "content": system}] + _to_wire(messages)}
+    if effort and REASONING.search(model):
+        body["reasoning_effort"] = "high" if effort in ("xhigh", "max") else effort
     if tools:
         body["tools"] = [{"type": "function", "function": t["schema"]} for t in tools]
     headers = auth_headers(key)

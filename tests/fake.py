@@ -30,10 +30,10 @@ class FakeProvider:
         self.replies = list(replies)
         self.requests = []
 
-    def complete(self, model, system, messages, tools, on_text=None):
+    def complete(self, model, system, messages, tools, on_text=None, effort=None):
         """Record the request and return the next scripted reply, streaming its text."""
         self.requests.append({"model": model, "system": system,
-                              "messages": copy.deepcopy(messages),
+                              "messages": copy.deepcopy(messages), "effort": effort,
                               "tools": [t["schema"]["name"] for t in tools or []]})
         if not self.replies:
             raise AssertionError("FakeProvider ran out of scripted replies")

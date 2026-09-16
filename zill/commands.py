@@ -27,7 +27,6 @@ from . import __version__, credentials, history, provider, session, settings, sk
 from .checkpoints import Checkpoints
 from .fleet import run_fleet
 from .profiles import PROFILES
-from .providers.http import SSL_FIX
 from .security import MODES
 
 UI_INSTALL = 'pip install "zill-harness[ui]"   (with uv: uv tool install zill-harness --with zill-ui)'
@@ -113,12 +112,6 @@ def doctor(argv):
     check("ok" if sys.version_info >= (3, 10) else "fail", "python",
           f"{platform.python_version()} (3.10 or newer needed)")
     check("ok", "zill", __version__)
-    try:
-        import ssl
-        check("ok", "https", ssl.OPENSSL_VERSION)
-    except ImportError as err:
-        check("fail", "https", f"this Python cannot load ssl ({err}), so no model can be "
-                               f"reached: {SSL_FIX}")
     if not os.path.isdir(workdir):
         check("fail", "workdir", f"{workdir} does not exist")
     else:
@@ -197,7 +190,8 @@ def inspect(argv):
     info = {
         "model": harness.model, "provider": provider.resolve(harness.model)[0],
         "key": "not needed" if key_var is None else ("missing" if missing else "set"),
-        "workdir": harness.workdir, "mode": harness.policy.mode, "profile": resolved["profile"],
+        "workdir": harness.workdir, "mode": harness.policy.mode,
+        "effort": harness.effort or "model default", "profile": resolved["profile"],
         "verify": harness.verify, "hooks": len(harness.hooks),
         "checkpoints": bool(harness.checkpoints and harness.checkpoints.available),
         "memory": os.path.isfile(os.path.join(harness.workdir, "ZILL.md")),
@@ -208,7 +202,7 @@ def inspect(argv):
         "notes": resolved["notes"] + harness.notes,
     }
     lines = [f"{field:<15}{info[field]}" for field in
-             ("model", "provider", "key", "workdir", "mode", "profile", "verify", "hooks",
+             ("model", "provider", "key", "workdir", "mode", "effort", "profile", "verify", "hooks",
               "checkpoints", "memory", "latest_session")]
     lines.append("tools:")
     lines += [f"  {t['name']:<14} {t['risk']:<12} {t['source']}" for t in info["tools"]]

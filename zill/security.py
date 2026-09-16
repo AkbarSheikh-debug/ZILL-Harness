@@ -14,6 +14,11 @@ Design rules:
     core_tools already confines their paths to the working directory.
   * Dry-run and read-only allow reads only. Safe mode asks the approver for
     everything else, and only an explicit True counts as yes.
+  * The modes between safe and yolo loosen one step at a time: edits runs
+    builtin write tools (jailed to the working directory, checkpointed) without
+    asking; auto also hands every other state-changing call to the reviewer,
+    runs it when the reviewer has no concern, and asks the approver otherwise.
+    Tools from MCP servers and plugins are never auto-approved as edits.
   * The policy object is shared with sub-agents, so every rule, dry-run
     included, applies to them too. Project hook and verify commands are
     decided like bash calls, so config files get no special trust.
@@ -24,7 +29,7 @@ from dataclasses import dataclass
 
 READ_TOOLS = {"read_file", "list_files", "grep"}  # for callers that pass no Tool
 COMMAND_TOOLS = {"bash", "hook", "verify", "terminal_send"}  # "command" is a shell line
-MODES = ("read-only", "safe", "yolo")
+MODES = ("read-only", "safe", "edits", "auto", "yolo")  # strictest first
 RISKS = ("read", "write", "execute", "network", "destructive", "credentialed")
 
 # Checked with re.search against every bash command.
@@ -84,16 +89,18 @@ def classify(call, tool=None):
 class Policy:
     """Tool-call gate; Harness passes every call through decide()."""
 
-    def __init__(self, mode="safe", approver=None, dry_run=False, plan=False):
+    def __init__(self, mode="safe", approver=None, dry_run=False, plan=False, reviewer=None):
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
         self.mode = mode
         self.approver = approver or _refuse
         self.dry_run = dry_run
         self.plan = plan  # plan mode: reads only, until the user approves a plan
+        # auto mode: reviewer(call, risk) returns None when a call looks safe, else a concern
+        self.reviewer = reviewer
 
     def decide(self, call, tool=None, ask_reason=None):
-        """Classify call and return a Decision; in safe mode this may ask the approver.
+        """Classify call and return a Decision; outside yolo this may ask the approver.
 
         ask_reason makes a call that is not a read need approval in every mode,
         yolo included, and is what the approver and a refusal say.
@@ -112,10 +119,19 @@ class Policy:
             return Decision(False, f"dry-run mode: {name} ({risk}) was not run", risk)
         if self.mode == "read-only":
             return Decision(False, f"{name} is not allowed in read-only mode", risk)
-        reason = ask_reason or f"{name} ({risk}) changes state and needs approval in safe mode"
+        concern = ask_reason
+        if not concern and self.mode in ("edits", "auto"):
+            if risk == "write" and getattr(tool, "source", None) == "builtin":
+                return Decision(True, None, risk)
+            if self.mode == "auto" and self.reviewer is not None:
+                concern = self.reviewer(call, risk)
+                if not concern:
+                    return Decision(True, None, risk)
+                concern = f"the auto-mode safety check paused it: {concern}"
+        reason = concern or f"{name} ({risk}) changes state and needs approval in {self.mode} mode"
         if self.approver(call, reason) is True:
             return Decision(True, None, risk, needs_approval=True)
-        refusal = f"the user did not approve {name}" + (f": {ask_reason}" if ask_reason else "")
+        refusal = f"the user did not approve {name}" + (f": {concern}" if concern else "")
         return Decision(False, refusal, risk, needs_approval=True)
 
     def check(self, call, tool=None):

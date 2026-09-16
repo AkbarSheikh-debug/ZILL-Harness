@@ -43,7 +43,8 @@ SLASH = {
     "/context": "how full the context window is, by part",
     "/cost": "tokens used and estimated cost",
     "/model": "pick a model from a list, or switch: /model anthropic:claude-opus-5",
-    "/mode": "show the mode, or switch: /mode safe | yolo | read-only",
+    "/mode": "show the mode, or switch: /mode read-only | safe | edits | auto | yolo",
+    "/effort": "show the effort, or set it: /effort low | medium | high | xhigh | max | default",
     "/compact": "summarise older turns now to free context",
     "/clear": "start a fresh conversation (new session)",
     "/plan": "plan mode: /plan on | off (reads only until you approve a plan)",
@@ -114,6 +115,9 @@ def print_event(kind, payload):
         print(_dim(credentials.redact(goal.describe(payload))))
     elif kind == "plan":
         print(_dim("plan approved; plan mode is off"))
+    elif kind == "auto_review":
+        concern = payload["concern"]
+        print(_dim(f"   auto: {'paused, ' + credentials.redact(concern) if concern else 'safe'}"))
     sys.stdout.flush()
 
 
@@ -123,7 +127,7 @@ _asking = threading.Lock()  # sub-agents on other threads must not interleave pr
 def ask_approval(call, reason):
     """Policy approver: show the call and return True only on an explicit yes."""
     with _asking:
-        if "untrusted" in reason:  # an unusual request says why; routine ones stay terse
+        if "untrusted" in reason or "safety check" in reason:  # unusual asks say why
             print(_dim(f"   {reason}"))
         try:
             answer = input(f"approve {_describe(call)}? [y/N] ")
@@ -172,7 +176,11 @@ def build_parser():
                              "ollama:qwen3 (default: ZILL_MODEL, config, else the first "
                              "provider with a key)")
     parser.add_argument("--mode", choices=MODES,
-                        help="tool policy (default: safe interactively, yolo headless)")
+                        help="tool policy: read-only, safe (ask before changes), edits (file "
+                             "edits run, the rest asks), auto (a safety check approves the "
+                             "rest or asks), yolo (default: safe interactively, yolo headless)")
+    parser.add_argument("--effort", choices=provider.EFFORTS,
+                        help="how hard the model thinks (default: config, else the model's own)")
     parser.add_argument("--profile", choices=list(PROFILES),
                         help="preset for the kind of work (default: coding)")
     parser.add_argument("--dry-run", action="store_true",
@@ -211,7 +219,7 @@ def main(argv=None):
     quiet = args.json
     try:
         resolved = settings.resolve(args.workdir, args.model, args.mode, args.profile,
-                                    headless=bool(task))
+                                    headless=bool(task), effort=args.effort)
         model = resolved["model"]
         problem = provider.check_model(model) or (
             provider.missing_key(model) and f"No API key found for {model}")
@@ -219,7 +227,8 @@ def main(argv=None):
             print(f"{problem}. Let's fix that.")
             if commands.setup():
                 return 1
-            resolved = settings.resolve(args.workdir, args.model, args.mode, args.profile)
+            resolved = settings.resolve(args.workdir, args.model, args.mode, args.profile,
+                                        effort=args.effort)
         # A bad model name is reported by make_harness, not as a missing key.
         model = resolved["model"]
         missing = not provider.check_model(model) and provider.missing_key(model)
@@ -302,6 +311,12 @@ def _slash(harness, line):
         elif arg:
             harness.policy.mode = arg
         print(f"mode: {harness.policy.mode}{' (dry-run)' if harness.policy.dry_run else ''}")
+    elif command == "/effort":
+        if arg and arg not in (*provider.EFFORTS, "default"):
+            print(f"effort must be one of {', '.join(provider.EFFORTS)}, or default")
+        elif arg:
+            harness.set_effort(None if arg == "default" else arg)
+        print(f"effort: {harness.effort or 'the model default'}")
     elif command == "/compact":
         before, after = harness.compact()
         print(f"compacted {before} messages to {after}" if after < before
@@ -450,7 +465,8 @@ def _pick_model(harness, arg):
 def _interactive(harness):
     """Prompt loop: each line is a task or a /command; Ctrl-D exits, Ctrl-C stops a run."""
     dry = "  dry-run" if harness.policy.dry_run else ""
-    print(f"ZILL Harness  model={harness.model}  mode={harness.policy.mode}{dry}\n"
+    effort = f"  effort={harness.effort}" if harness.effort else ""
+    print(f"ZILL Harness  model={harness.model}  mode={harness.policy.mode}{effort}{dry}\n"
           f"jail: {harness.workdir}\nCtrl-C interrupts a run. Type /help for commands.")
     if harness.messages:
         print(f"resumed {len(harness.messages)} messages from {harness.session_path}")

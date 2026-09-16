@@ -15,8 +15,10 @@ Design rules:
     format; nothing here parses a vendor's JSON.
 
 The provider contract (what every adapter honours):
-  complete(model, system, messages, tools, base, key, on_text=None)
+  complete(model, system, messages, tools, base, key, on_text=None, effort=None)
       -> {"text", "tool_calls", "usage"}; with on_text, stream and report text fragments
+    effort: one of EFFORTS, or None for the model's default. Each adapter maps it
+    to its vendor's reasoning control, and sends nothing to a model without one.
     messages: {"role": "user", "text"}
               {"role": "assistant", "text", "tool_calls": [{"id", "name", "args", ...}],
                "provider_data"?}
@@ -57,6 +59,7 @@ KEY_PAGES = {
     "deepseek": "https://platform.deepseek.com/api_keys",
 }
 OPENAI_NAME = re.compile(r"(gpt-|chatgpt-|o\d)")
+EFFORTS = ("low", "medium", "high", "xhigh", "max")  # how hard the model thinks
 
 
 def resolve(model):
@@ -124,11 +127,14 @@ def model_info(model):
     return adapter.model_info(model_id)
 
 
-def complete(model, system, messages, tools, on_text=None):
+def complete(model, system, messages, tools, on_text=None, effort=None):
     """Send one conversation to model's provider and return the neutral reply.
 
     With on_text, the reply streams and on_text receives each text fragment.
+    effort (one of EFFORTS) asks for more or less reasoning where the model has it.
     """
+    if effort is not None and effort not in EFFORTS:
+        raise ValueError(f"effort must be one of {', '.join(EFFORTS)}, got {effort!r}")
     name, adapter, base, key_var, model_id = resolve(model)
     key = None
     if key_var:
@@ -136,4 +142,4 @@ def complete(model, system, messages, tools, on_text=None):
         if not key:
             raise RuntimeError(f"No API key for {name}. Run `zill setup`, or set {key_var}.")
     return adapter.complete(model_id, system, messages, tools, base=base, key=key,
-                            on_text=on_text)
+                            on_text=on_text, effort=effort)

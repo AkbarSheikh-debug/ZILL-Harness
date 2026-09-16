@@ -10,6 +10,8 @@ Design rules:
     back the exact thoughtSignature it arrived with, so calls keep it.
   * When Gemini issues its own call id, the functionCall and its
     functionResponse both echo it; ids ZILL invented are never sent.
+  * An effort goes out as thinkingConfig.thinkingLevel, to Gemini 3 models only
+    (older ones take a token budget instead). xhigh and max step down to high.
 """
 
 from .http import post_json, post_sse
@@ -57,7 +59,7 @@ def _to_wire(messages):
     return contents
 
 
-def complete(model, system, messages, tools, base, key, on_text=None):
+def complete(model, system, messages, tools, base, key, on_text=None, effort=None):
     """Send one conversation to Gemini and return its neutral reply.
 
     With on_text, the reply is streamed and each text fragment is passed to
@@ -69,6 +71,9 @@ def complete(model, system, messages, tools, base, key, on_text=None):
         "generationConfig": {"temperature": 0.4,
                              "maxOutputTokens": MODEL_INFO["max_output_tokens"]},
     }
+    if effort and model.startswith("gemini-3"):
+        level = "high" if effort in ("xhigh", "max") else effort
+        body["generationConfig"]["thinkingConfig"] = {"thinkingLevel": level}
     if tools:
         body["tools"] = [{"functionDeclarations": [t["schema"] for t in tools]}]
     headers = auth_headers(key)
