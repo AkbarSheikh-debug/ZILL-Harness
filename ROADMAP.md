@@ -37,8 +37,9 @@ large work.
 |---|---|
 | Runtime dependencies | **Zero.** Standard library only. |
 | Python | 3.10+ |
-| Core, `zill/*.py` | **≤ 3,500 lines** |
+| Core, `zill/*.py` | **≤ 4,500 lines** (raised from 3,500 for the workbench tools) |
 | Edge packages (`zill/mcp/`, `zill/plugins/`) | **≤ 1,500 lines** |
+| The app, [ZILL-UI](https://github.com/AkbarSheikh-debug/ZILL-UI) `zill_ui/*.py` | **≤ 1,500 lines**, in its own repository |
 | Tests, examples, evals | Not counted, but kept readable |
 
 Config files are **JSON**, because `tomllib` needs Python 3.11 and ZILL
@@ -316,6 +317,33 @@ the same budgets: standard library only, and no full-screen UI.
 
 **Acceptance:** each command is covered in `tests/test_terminal.py` with no key and no
 network, and the core stays under 3,500 lines.
+
+### v1.2: Memory and context
+
+The goal is memory that stays useful and safe over many sessions, and long runs that
+spend fewer tokens, with plain files and no index or background process.
+
+- [x] **Tainted memory writes:** after network, MCP or connector output enters a task
+      (sub-agents included), `remember` and writes to `ZILL.md` need approval in every mode.
+- [x] **Loop guard:** the same call with the same result warns at 3 repeats and stops at 5.
+- [x] **Bounded tool output:** every result over 12,000 characters, from any source, keeps its
+      head and tail; the full text is saved under `.zill/spill/` for `read_file` or `grep`.
+      `read_file` pages with `offset` and `limit`.
+- [x] **`bash` exit status:** stderr gets its own section, and a non-zero exit code is always
+      reported, even when the command printed output.
+- [ ] **Short-term notes:** `.zill/memory/YYYY-MM-DD.md`, never injected; the compaction
+      summary also returns durable facts, appended there at no extra model call.
+- [ ] **Memory budget:** the injected `ZILL.md` is capped, with the size shown in `/context`.
+- [ ] **User memory:** `~/.zill/USER.md` preferences as dated directives that replace, never
+      contradict, older ones; `remember` gains a user scope.
+- [ ] **`~/.zill/SOUL.md`:** optional voice and tone, loaded after the safety rules, never
+      from a project.
+- [ ] **Tool-result trimming:** old oversized results cut to head and tail before compaction.
+- [ ] **Overflow recovery:** a context-length error compacts and retries once.
+- [ ] **`/compact <focus>`**, with exact paths, identifiers and errors kept in summaries.
+
+**Acceptance:** scenario tests show a web page unable to write memory without approval,
+a looping model stopped, and facts surviving compaction into the day's notes.
 
 ---
 

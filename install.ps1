@@ -5,6 +5,9 @@
 # native tool (uv prints notes there) into a fatal error. Run checks exit codes instead.
 
 $source = if ($env:ZILL_SOURCE) { $env:ZILL_SOURCE } else { 'https://github.com/AkbarSheikh-debug/ZILL-Harness/archive/refs/heads/main.zip' }
+# The browser app (zill ui) comes along from ZILL_UI_SOURCE; set it to an empty string to skip the app.
+$uiSource = if ($null -ne $env:ZILL_UI_SOURCE) { $env:ZILL_UI_SOURCE } else { 'https://github.com/AkbarSheikh-debug/ZILL-UI/archive/refs/heads/main.zip' }
+$noUi = 'the app (zill ui) could not be installed; ZILL works without it (see the README to add it later)'
 
 function Say($msg) { Write-Host "zill: $msg" -ForegroundColor Cyan }
 function Has($name) { [bool](Get-Command $name -ErrorAction SilentlyContinue) }
@@ -29,26 +32,46 @@ function Add-UserPath($dir) {
     }
 }
 
+# ZILL with the app when it installs, else ZILL alone. $extra holds uv's --python flag, if any.
+# uv's own Python, not whatever is on PATH (an Anaconda base Python breaks HTTPS).
+function Install-Uv($extra) {
+    if ($uiSource) {
+        & uv tool install --force --managed-python @extra $source --with $uiSource
+        if ($LASTEXITCODE -eq 0) { return }
+        Say $noUi
+    }
+    Run uv tool install --force --managed-python @extra $source
+}
+
 $py = Find-Python
 if (Has 'uv') {
     Say 'installing with uv'
-    # uv's own Python, not whatever is on PATH (an Anaconda base Python breaks HTTPS).
-    Run uv tool install --force --managed-python $source
+    Install-Uv @()
     uv tool update-shell *> $null
 } elseif (Has 'pipx') {
     Say 'installing with pipx'
     Run pipx install --force $source
+    if ($uiSource) {
+        & pipx inject --force zill-harness $uiSource
+        if ($LASTEXITCODE) { Say $noUi }
+    }
     pipx ensurepath *> $null
 } elseif ($py) {
     Say "installing with $py -m pip --user"
-    Run $py -m pip install --user --upgrade $source
+    $installed = $false
+    if ($uiSource) {
+        & $py -m pip install --user --upgrade $source $uiSource
+        $installed = $LASTEXITCODE -eq 0
+        if (-not $installed) { Say $noUi }
+    }
+    if (-not $installed) { Run $py -m pip install --user --upgrade $source }
     Add-UserPath (& $py -c "import sysconfig; print(sysconfig.get_path('scripts', 'nt_user'))")
 } else {
     Say 'no Python 3.10+ found; installing uv (it brings its own Python)'
     Invoke-RestMethod https://astral.sh/uv/install.ps1 -ErrorAction Stop | Invoke-Expression
     $env:Path = "$HOME\.local\bin;$env:Path"
-    Run uv tool install --force --managed-python --python 3.12 $source
+    Install-Uv @('--python', '3.12')
     uv tool update-shell *> $null
 }
 
-Say 'done. Open a new terminal and run: zill'
+Say 'done. Open a new terminal and run: zill    (or zill ui for the app)'

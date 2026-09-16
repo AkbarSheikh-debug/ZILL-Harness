@@ -24,7 +24,7 @@ from . import config
 from .client import MCPClient, MCPError
 
 KEEP_SCHEMA_KEYS = {"type", "description", "properties", "required", "items", "enum"}
-MAX_RESULT_CHARS = 12000
+MAX_RESULT_CHARS = 200_000  # a memory bound; the harness shortens and spills past its own cap
 NAME_LIMIT = 64  # OpenAI and Anthropic reject longer tool names
 
 

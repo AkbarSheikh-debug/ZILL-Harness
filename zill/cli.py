@@ -26,8 +26,10 @@ Design rules:
 import argparse
 import json
 import sys
+import threading
 
-from . import commands, config, cost, credentials, provider, settings, skills
+from . import commands, config, cost, credentials, goal, history, provider, settings, skills
+from .jobs import _kill
 from .profiles import PROFILES
 from .security import MODES
 
@@ -44,6 +46,14 @@ SLASH = {
     "/mode": "show the mode, or switch: /mode safe | yolo | read-only",
     "/compact": "summarise older turns now to free context",
     "/clear": "start a fresh conversation (new session)",
+    "/plan": "plan mode: /plan on | off (reads only until you approve a plan)",
+    "/goal": "keep working toward a goal over turns: /goal OBJECTIVE | /goal | /goal clear",
+    "/retry": "run your last message again",
+    "/branch": "continue in a new session copied from this one",
+    "/jobs": "background jobs, terminals and sub-agents",
+    "/kill": "stop a job, terminal or sub-agent: /kill ID",
+    "/search": "search earlier sessions here: /search TEXT",
+    "/feedback": "rate the last reply: /feedback good | bad [note]",
     "/todo": "show the agent's checklist",
     "/undo": "undo the agent's latest change",
     "/checkpoints": "list checkpoints",
@@ -90,21 +100,62 @@ def print_event(kind, payload):
     elif kind == "tool_end":
         first = credentials.redact((payload["result"].splitlines() or [""])[0])
         print(_dim(f"   {_clip(first, RESULT_CLIP)}"))
+    elif kind == "loop_detected":
+        action = "stopping" if payload["stopped"] else "warned the model"
+        print(_dim(f"loop: {payload['name']} repeated {payload['count']}x, {action}"))
     elif kind == "todo":
         print(_dim(credentials.redact(payload["items"])))
     elif kind == "verify":
         outcome = "not run" if payload["exit"] is None else f"exit {payload['exit']}"
         print(_dim(f"verify: {payload['command']} -> {outcome}"))
+    elif kind == "present":
+        print(f"presented: {', '.join(f['path'] for f in payload['files'])}")
+    elif kind == "goal" and payload:
+        print(_dim(credentials.redact(goal.describe(payload))))
+    elif kind == "plan":
+        print(_dim("plan approved; plan mode is off"))
     sys.stdout.flush()
+
+
+_asking = threading.Lock()  # sub-agents on other threads must not interleave prompts
 
 
 def ask_approval(call, reason):
     """Policy approver: show the call and return True only on an explicit yes."""
-    try:
-        answer = input(f"approve {_describe(call)}? [y/N] ")
-    except EOFError:
-        return False
+    with _asking:
+        if "untrusted" in reason:  # an unusual request says why; routine ones stay terse
+            print(_dim(f"   {reason}"))
+        try:
+            answer = input(f"approve {_describe(call)}? [y/N] ")
+        except EOFError:
+            return False
     return answer.strip().lower() in ("y", "yes")
+
+
+def ask_user(request):
+    """Harness asker: prompt for a question's answer or a plan's approval; None if skipped."""
+    with _asking:
+        try:
+            if request["kind"] == "plan":
+                print(f"\nplan for your review:\n{credentials.redact(request['plan'])}")
+                answer = input("approve it? [y = yes, Enter = no, or type what to change] ")
+                yes = answer.strip().lower() in ("y", "yes")
+                return {"approved": yes, "feedback": "" if yes else answer.strip()}
+            header = f"[{request['header']}] " if request.get("header") else ""
+            print(f"\n{header}{credentials.redact(request['question'])}")
+            options = request["options"]
+            for number, option in enumerate(options, 1):
+                detail = f" - {option['description']}" if option.get("description") else ""
+                print(f"  {number}. {option['label']}{detail}")
+            hint = "numbers, comma-separated" if request["multi_select"] else "a number"
+            answer = input(f"answer ({hint}, or type your own): " if options else "answer: ")
+        except EOFError:
+            return None
+    picks = [p.strip() for p in answer.split(",")]
+    if (options and all(p.isdigit() and 1 <= int(p) <= len(options) for p in picks)
+            and (request["multi_select"] or len(picks) == 1)):
+        return ", ".join(options[int(p) - 1]["label"] for p in picks)
+    return answer.strip() or None
 
 
 def build_parser():
@@ -126,6 +177,10 @@ def build_parser():
                         help="preset for the kind of work (default: coding)")
     parser.add_argument("--dry-run", action="store_true",
                         help="plan and inspect only: every call that is not a read is blocked")
+    parser.add_argument("--plan", action="store_true",
+                        help="start in plan mode: reads only until you approve the agent's plan")
+    parser.add_argument("--goal", action="store_true",
+                        help="treat the task as a goal and keep taking turns until it is done")
     parser.add_argument("--verify", metavar="COMMAND",
                         help="a run is done only when COMMAND passes, e.g. \"pytest -q\" "
                              "(default: \"verify\" in .zill/project.json)")
@@ -173,6 +228,7 @@ def main(argv=None):
                                f"Run `zill setup`, or set {missing}.")
         harness = settings.make_harness(
             resolved, approver=None if quiet else ask_approval, dry_run=args.dry_run,
+            plan=args.plan, asker=None if quiet else ask_user,
             on_event=None if quiet else print_event, max_turns=args.max_turns,
             verify=args.verify, stream=not quiet and sys.stdout.isatty())
     except RuntimeError as err:
@@ -184,7 +240,7 @@ def main(argv=None):
         if args.resume and not harness.resume() and not quiet:
             print("no session to resume; starting fresh", file=sys.stderr)
         if task:
-            return _headless(harness, task, quiet)
+            return _headless(harness, task, quiet, args.goal)
         return _interactive(harness)
     finally:
         harness.close()
@@ -208,16 +264,16 @@ def _prices():
         return {}
 
 
-def _headless(harness, task, as_json):
-    """Run one task; print its result (JSON with --json) and a cost line; return exit code."""
+def _headless(harness, task, as_json, as_goal=False):
+    """Run one task (or pursue it as a goal); print its result and a cost line; return exit code."""
     try:
-        result = harness.run(task)
+        result = harness.pursue(task) if as_goal else harness.run(task)
     except RuntimeError as err:  # provider failures: a message, not a traceback
         return _fail(err, as_json)
     if as_json:
         print(json.dumps({"ok": True, "result": credentials.redact(result),
                           "model": harness.model, "session": harness.session_path,
-                          "usage": harness.usage, "todo": harness.todo,
+                          "usage": harness.usage, "todo": harness.todo, "goal": harness.goal,
                           "cost_usd": cost.estimate(harness.model, harness.usage, _prices())},
                          ensure_ascii=False))
     else:
@@ -268,11 +324,60 @@ def _slash(harness, line):
             commands.restore(harness.checkpoints)
         else:
             commands.checkpoints(["-d", harness.workdir])
+    elif command in ("/plan", "/goal", "/retry", "/branch", "/jobs", "/kill", "/search",
+                     "/feedback"):
+        _work_command(harness, command, arg)
     else:
         sub = command[1:]
         print(f"`{sub}` is a terminal command: /exit, then run `zill {sub}`"
               if sub in commands.COMMANDS else f"unknown command {command}; try /help")
     return True
+
+
+def _work_command(harness, command, arg):
+    """Handle the slash commands for plans, goals, turns, background work and history."""
+    turns = len(harness.turn_starts(harness.transcript()))
+    if command == "/plan":
+        if arg in ("on", "off"):
+            harness.policy.plan = arg == "on"
+        print(f"plan mode: {'on' if harness.policy.plan else 'off'}")
+    elif command == "/goal" and arg == "clear":
+        harness.goal = None
+        print("goal cleared")
+    elif command == "/goal":
+        if arg or (harness.goal and harness.goal["status"] == "active"):
+            harness.pursue(arg or None)
+        print(goal.describe(harness.goal))
+    elif command in ("/retry", "/branch", "/feedback") and not turns:
+        print("nothing to work with yet: send a message first")
+    elif command == "/retry":
+        harness.run(harness.rewind(turns - 1))
+    elif command == "/branch":
+        print(f"continuing in a new session: {harness.branch(turns - 1)}")
+    elif command == "/jobs":
+        rows = harness.processes.rows() + [dict(r, kind="agent", command=r["name"])
+                                           for r in (harness.agents.rows() if harness.agents else [])]
+        print("\n".join(f"{r['id']:<5} {r['kind']:<9} {r['status']:<12} {r['command']}"
+                        for r in rows) or "no jobs, terminals or sub-agents")
+    elif command == "/kill":
+        items = {**harness.processes.jobs, **harness.processes.terminals}
+        if arg in items:
+            _kill(items[arg]["proc"])
+        elif harness.agents and arg in harness.agents.agents:
+            harness.agents.agents[arg]["harness"].stop()
+        print(f"stopped {arg}" if arg in items or (harness.agents and arg in harness.agents.agents)
+              else "usage: /kill ID (see /jobs)")
+    elif command == "/search":
+        hits = history.search(harness.workdir, arg) if arg else []
+        print("\n".join(credentials.redact(f"{h['session']}  {h['role']}: {h['snippet']}")
+                        for h in hits) or "usage: /search TEXT (no matches)")
+    elif command == "/feedback":
+        rating, _, note = arg.partition(" ")
+        if rating not in ("good", "bad") or not harness.session_path:
+            print("usage: /feedback good | bad [note]")
+            return
+        history.feedback(harness.workdir, harness.audit_label(), turns - 1, rating, note)
+        print("thanks: saved to .zill/feedback.jsonl")
 
 
 def _percent(used):
@@ -368,7 +473,10 @@ def _interactive(harness):
                     return 0
                 continue
             harness.run(task)
+            if harness.goal and harness.goal["status"] == "active":  # the model set a goal
+                harness.pursue()
         except KeyboardInterrupt:
+            harness.stop()  # background sub-agents stop too
             print(f"\ninterrupted. The session log is safe: {harness.session_path}\n"
                   f"Keep typing to continue here, or run with --resume later.")
         except Exception as err:  # a failed API call ends the run, not the session

@@ -6,6 +6,7 @@ side by side.
 """
 
 __version__ = "1.0.0"  # defined before the imports below: harness.py reads it
+UI_API = 1  # the Harness surface zill-ui builds on; bumped when that surface breaks
 
 from .fleet import run_fleet  # noqa: E402
 from .harness import Harness  # noqa: E402

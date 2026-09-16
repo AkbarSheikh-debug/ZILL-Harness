@@ -37,5 +37,8 @@ Changelog = "https://github.com/AkbarSheikh-debug/ZILL-Harness/blob/main/CHANGEL
 [tool.setuptools.packages.find]
 include = ["zill", "zill.*"]
 
+[project.optional-dependencies]
+ui = ["zill-ui"]  # the browser app: `zill ui`
+
 [tool.setuptools.dynamic]
 version = { attr = "zill.__version__" }

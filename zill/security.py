@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass
 
 READ_TOOLS = {"read_file", "list_files", "grep"}  # for callers that pass no Tool
-COMMAND_TOOLS = {"bash", "hook", "verify"}  # calls whose "command" is a shell line
+COMMAND_TOOLS = {"bash", "hook", "verify", "terminal_send"}  # "command" is a shell line
 MODES = ("read-only", "safe", "yolo")
 RISKS = ("read", "write", "execute", "network", "destructive", "credentialed")
 
@@ -84,28 +84,39 @@ def classify(call, tool=None):
 class Policy:
     """Tool-call gate; Harness passes every call through decide()."""
 
-    def __init__(self, mode="safe", approver=None, dry_run=False):
+    def __init__(self, mode="safe", approver=None, dry_run=False, plan=False):
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
         self.mode = mode
         self.approver = approver or _refuse
         self.dry_run = dry_run
+        self.plan = plan  # plan mode: reads only, until the user approves a plan
 
-    def decide(self, call, tool=None):
-        """Classify call and return a Decision; in safe mode this may ask the approver."""
+    def decide(self, call, tool=None, ask_reason=None):
+        """Classify call and return a Decision; in safe mode this may ask the approver.
+
+        ask_reason makes a call that is not a read need approval in every mode,
+        yolo included, and is what the approver and a refusal say.
+        """
         name, risk = call["name"], classify(call, tool)
         if risk == "destructive":
             return Decision(False, DENIED, risk)
-        if risk == "read" or (self.mode == "yolo" and not self.dry_run):
+        if risk == "read":
+            return Decision(True, None, risk)
+        if self.plan:
+            return Decision(False, f"plan mode: {name} ({risk}) waits until the user approves "
+                                   f"a plan; call exit_plan_mode with your plan", risk)
+        if self.mode == "yolo" and not self.dry_run and not ask_reason:
             return Decision(True, None, risk)
         if self.dry_run:
             return Decision(False, f"dry-run mode: {name} ({risk}) was not run", risk)
         if self.mode == "read-only":
             return Decision(False, f"{name} is not allowed in read-only mode", risk)
-        reason = f"{name} ({risk}) changes state and needs approval in safe mode"
+        reason = ask_reason or f"{name} ({risk}) changes state and needs approval in safe mode"
         if self.approver(call, reason) is True:
             return Decision(True, None, risk, needs_approval=True)
-        return Decision(False, f"the user did not approve {name}", risk, needs_approval=True)
+        refusal = f"the user did not approve {name}" + (f": {ask_reason}" if ask_reason else "")
+        return Decision(False, refusal, risk, needs_approval=True)
 
     def check(self, call, tool=None):
         """Return None to allow call, or a reason string to block it."""

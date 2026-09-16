@@ -45,13 +45,13 @@ def resolve(workdir=".", model=None, mode=None, profile=None, headless=False):
             "project": project, "user": user, "notes": notes}
 
 
-def make_harness(settings, approver=None, dry_run=False, **kwargs):
+def make_harness(settings, approver=None, dry_run=False, plan=False, **kwargs):
     """Build the Harness a run with these settings would use, without calling a model."""
     problem = provider.check_model(settings["model"])
     if problem:
         raise RuntimeError(f"{problem}. Run `zill setup`, or pass -m provider:model.")
     profile = PROFILES[settings["profile"]]
     kwargs.setdefault("system_extra", profile["prompt"])
-    return Harness(settings["workdir"], model=settings["model"],
-                   policy=Policy(settings["mode"], approver=approver, dry_run=dry_run),
+    policy = Policy(settings["mode"], approver=approver, dry_run=dry_run, plan=plan)
+    return Harness(settings["workdir"], model=settings["model"], policy=policy,
                    allowed_tools=profile["tools"], **kwargs)

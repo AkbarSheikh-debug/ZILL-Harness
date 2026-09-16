@@ -74,6 +74,47 @@ class LoopScenarios(unittest.TestCase):
             self.assertEqual(harness.run("loop forever"), "wrapped")
         self.assertEqual(fake.requests[-1]["tools"], [])
 
+    def test_repeated_identical_calls_warn_then_stop_the_run(self):
+        @tool("Report the build status.", risk="read")
+        def status():
+            return "build: failing"
+
+        events = []
+        replies = [call("status")] * 5 + [text("I was stuck")]
+        with FakeProvider(*replies) as fake:
+            harness = self.harness(extra_tools=[status],
+                                   on_event=lambda kind, payload: events.append((kind, payload)))
+            self.assertEqual(harness.run("loop forever"), "I was stuck")
+        results = [m["text"] for m in tool_results(harness)]
+        self.assertNotIn("[ZILL:", results[1])
+        self.assertIn("returned this exact result 3 times", results[2])
+        self.assertEqual(fake.requests[-1]["tools"], [])  # a tool-less wrap-up call
+        self.assertIn("Stopped: status kept returning", harness.messages[-2]["text"])
+        detected = [p for kind, p in events if kind == "loop_detected"]
+        self.assertEqual([(p["count"], p["stopped"]) for p in detected],
+                         [(3, False), (4, False), (5, True)])
+
+    def test_large_results_from_any_source_are_bounded_and_saved(self):
+        @tool("Dump a lot of text.", source="plugin")
+        def dump():
+            return "start " + "z" * 50000 + " end"
+
+        replies = [call("dump")] * 3 + [text("done")]
+        with FakeProvider(*replies):
+            harness = self.harness(extra_tools=[dump])
+            harness.run("dump it")
+        results = [m["text"] for m in tool_results(harness)]
+        self.assertTrue(results[0].startswith("start ") and results[0].endswith(" end"))
+        self.assertIn("full output saved to .zill/spill/dump-", results[0])
+        self.assertIn("returned this exact result 3 times", results[2])  # same path each time
+
+    def test_calls_that_make_progress_are_not_loops(self):
+        replies = [call("write_file", path="a.txt", content=str(n)) for n in range(6)]
+        with FakeProvider(*replies, text("done")):
+            harness = self.harness()
+            self.assertEqual(harness.run("count"), "done")
+        self.assertFalse(any("[ZILL:" in m["text"] for m in tool_results(harness)))
+
     def test_system_prompt_names_the_real_shell(self):
         from zill.tools import SHELL
         self.assertIn(SHELL, self.harness().system)

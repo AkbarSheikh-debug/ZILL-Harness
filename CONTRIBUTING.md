@@ -8,7 +8,7 @@ put interoperability at the edges. The full plan is in [ROADMAP.md](ROADMAP.md).
 
 1. **Zero runtime dependencies.** Standard library only. `dependencies = []`
    in `pyproject.toml` stays empty.
-2. **Core line budget: 3,500 lines** across `zill/` (edge packages `zill/mcp/` and
+2. **Core line budget: 4,500 lines** across `zill/` (edge packages `zill/mcp/` and
    `zill/plugins/` get a separate 1,500). CI fails above either.
    If your feature needs more room, make it smaller or propose an optional module.
 3. **One concept per file.** Each module opens with a docstring stating the
