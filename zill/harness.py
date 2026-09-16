@@ -102,6 +102,7 @@ class Harness:
         self._on_taint = _on_taint  # a sub-agent's taint also marks its parent
         self._stop, self._parent_stopped = threading.Event(), _parent_stopped
         self._steered, self._lock = [], threading.Lock()
+        self._writing = threading.RLock()  # the worker and a reader (the app) both flush
         # None means "from .zill/project.json"; "" or [] switch the feature off.
         project = (config.load_project(self.workdir) if verify is None or hooks is None
                    else {})
@@ -356,12 +357,13 @@ class Harness:
 
     def _load(self, messages):
         """Make messages the conversation, rebuild state from it, and rewrite the log."""
-        self.messages = session.repair(messages)
-        self.todo, self.goal = todo.latest(self.messages), goal.latest(self.messages)
-        self.last_input = 0
-        if self.persist and self.session_path:
-            self._rewrite()
-        self._recorded = len(self.messages)
+        with self._writing:
+            self.messages = session.repair(messages)
+            self.todo, self.goal = todo.latest(self.messages), goal.latest(self.messages)
+            self.last_input = 0
+            if self.persist and self.session_path:
+                self._rewrite()
+            self._recorded = len(self.messages)
 
     def _mark_tainted(self):
         """Record that untrusted content ran, here and in every parent harness."""
@@ -507,12 +509,13 @@ class Harness:
         self.on_event("checkpoint", {"id": ref, "label": label})
 
     def _flush(self):
-        """Append every message not yet recorded to the session file."""
-        self._recorded = min(self._recorded, len(self.messages))
-        if self.persist and self.session_path:
-            for message in self.messages[self._recorded:]:
-                session.append(self.session_path, message)
-        self._recorded = len(self.messages)
+        """Append every message not yet recorded to the session file, once, from any thread."""
+        with self._writing:
+            recorded, messages = min(self._recorded, len(self.messages)), list(self.messages)
+            if self.persist and self.session_path:
+                for message in messages[recorded:]:
+                    session.append(self.session_path, message)
+            self._recorded = len(messages)
 
     def _rewrite(self):
         """Replace the session file with the current transcript, atomically."""

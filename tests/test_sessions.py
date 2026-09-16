@@ -4,6 +4,7 @@ import glob
 import json
 import os
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -82,6 +83,25 @@ class SessionTests(unittest.TestCase):
         self.assertNotIn("secret-value-123", raw)
         # harness.workdir is realpath'd (macOS /private, Windows 8.3 names).
         self.assertEqual(session.latest(harness.workdir), harness.session_path)
+
+    def test_concurrent_flushes_do_not_duplicate_messages(self):
+        # An app built on the harness may read the transcript (which flushes) from its
+        # own thread while the worker thread is flushing the same unrecorded messages.
+        harness = Harness(self.workdir, enable_subagents=False)
+        harness.session_path = session.new_session(self.workdir, "concurrent")
+        harness.messages = [{"role": "user", "text": f"m{i}"} for i in range(20)]
+        barrier = threading.Barrier(8)
+
+        def flush():
+            barrier.wait()
+            harness._flush()
+
+        threads = [threading.Thread(target=flush) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(len(session.load(harness.session_path)), 20)
 
 
 if __name__ == "__main__":
